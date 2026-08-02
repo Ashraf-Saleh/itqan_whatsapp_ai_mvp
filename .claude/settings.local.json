@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(xargs ls -la)",
+      "Bash(pip index *)",
+      "Bash(pip install *)",
+      "Bash(pip uninstall *)",
+      "Bash(python -c \"from app.agent import optionally_extract_with_llm; print\\('import ok'\\)\")",
+      "Bash(py -3 -c \"print\\('hi'\\)\")",
+      "Bash(conda env *)",
+      "Read(//c/Users/Office/.conda/envs//**)",
+      "Read(//c/Users/Office/**)",
+      "Read(//c/ProgramData/**)",
+      "Bash(ls /c/Users/Office/.conda/envs/sales_perf_env/ 2>&1 | head; find /c/Users -maxdepth 2 -iname \"miniconda3\" -o -iname \"anaconda3\" 2>/dev/null)",
+      "Read(//c/Users/**)",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe --version)",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -m pip show openai)",
+      "Bash(pip --version)",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -m pip install -q -r requirements.txt)",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -c \"from app.agent import optionally_extract_with_llm; print\\('import ok'\\)\")",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -m pytest -q)",
+      "Bash(\".venv/Scripts/python.exe\" -c \"import google.genai as genai; print\\(genai.__file__\\)\")",
+      "Bash(\".venv/Scripts/pip.exe\" show *)",
+      "Bash(./.venv/Scripts/python.exe --version)",
+      "Bash(./.venv/Scripts/python.exe -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(where python *)",
+      "Bash(where python3 *)",
+      "PowerShell(py --list 2>&1)",
+      "PowerShell(Get-Command py -ErrorAction SilentlyContinue)",
+      "Bash(python -c \"import starlette, os; print\\(os.path.dirname\\(starlette.__file__\\)\\)\")",
+      "Bash(python3 -c \"import starlette, os; print\\(os.path.dirname\\(starlette.__file__\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -m py_compile app/config.py app/messaging/meta.py app/main.py app/agent.py)",
+      "Bash(\"/c/Program Files/Inkscape/bin/python.exe\" -m py_compile app/config.py app/messaging/meta.py app/main.py app/agent.py)"
+    ]
+  }
+}
