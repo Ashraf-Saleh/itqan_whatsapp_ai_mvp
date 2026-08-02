@@ -4,6 +4,13 @@ class OutreachRequest(BaseModel):
     phone: str
     name: str | None = None
 
+class OutreachRecipient(BaseModel):
+    phone: str
+    name: str
+
+class BulkOutreachRequest(BaseModel):
+    recipients: list[OutreachRecipient]
+
 class SimulatorRequest(BaseModel):
     phone: str = "+201000000001"
     name: str | None = "Test Client"

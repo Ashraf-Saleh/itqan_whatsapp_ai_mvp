@@ -19,7 +19,7 @@ from .database import Base, SessionLocal, engine, get_db
 from .messaging import MetaAPIError, MetaWhatsAppClient
 from .messaging.meta import normalize_meta_phone
 from .models import Contact, Message, Unit
-from .schemas import OutreachRequest, SimulatorRequest, UnitCreate
+from .schemas import BulkOutreachRequest, OutreachRequest, SimulatorRequest, UnitCreate
 from .seed import seed_units
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -252,6 +252,47 @@ async def send_outreach(payload: OutreachRequest, db: Session = Depends(get_db))
     body = f"[Template: {settings.meta_test_template_name}/{settings.meta_test_template_language}]"
     save_message(db, contact, "outbound", body, message_id)
     return {"status": "accepted", "message_id": message_id, "to": phone, "meta_response": response}
+
+
+@app.post("/api/outreach/bulk", dependencies=[Depends(require_admin)])
+async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends(get_db)):
+    results = []
+    for recipient in payload.recipients:
+        phone = normalize_meta_phone(recipient.phone)
+        if not phone:
+            results.append({"phone": recipient.phone, "name": recipient.name, "status": "failed", "detail": "Invalid phone number"})
+            continue
+
+        contact = db.query(Contact).filter(Contact.phone == phone).first()
+        if not contact:
+            contact = Contact(phone=phone, name=recipient.name, contact_status="Outreach Sent")
+            db.add(contact)
+            db.commit()
+            db.refresh(contact)
+        elif recipient.name and not contact.name:
+            contact.name = recipient.name
+            db.commit()
+        if contact.opted_out:
+            results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": "Contact has opted out"})
+            continue
+
+        try:
+            response = await MetaWhatsAppClient().send_template(
+                phone,
+                template_name=settings.meta_test_template_name,
+                language_code=settings.meta_test_template_language,
+                body_params=[recipient.name],
+            )
+        except MetaAPIError as exc:
+            results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": str(exc)})
+            continue
+
+        message_id = (response.get("messages") or [{}])[0].get("id")
+        body = f"[Template: {settings.meta_test_template_name}/{settings.meta_test_template_language}] name={recipient.name}"
+        save_message(db, contact, "outbound", body, message_id)
+        results.append({"phone": phone, "name": recipient.name, "status": "sent", "message_id": message_id})
+
+    return {"results": results}
 
 
 @app.post("/api/test-text", dependencies=[Depends(require_admin)])

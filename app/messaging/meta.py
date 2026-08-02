@@ -66,6 +66,7 @@ class MetaWhatsAppClient:
         to: str,
         template_name: str = "hello_world",
         language_code: str = "en_US",
+        body_params: list[str] | None = None,
     ) -> dict[str, Any]:
         payload = {
             "messaging_product": "whatsapp",
@@ -76,6 +77,10 @@ class MetaWhatsAppClient:
                 "language": {"code": language_code},
             },
         }
+        if body_params:
+            payload["template"]["components"] = [
+                {"type": "body", "parameters": [{"type": "text", "text": p} for p in body_params]}
+            ]
         return await self._send(payload)
 
 
