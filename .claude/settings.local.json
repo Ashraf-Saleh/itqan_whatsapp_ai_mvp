@@ -85,7 +85,10 @@
       "Bash(gh --version)",
       "Bash(gh run *)",
       "Bash(curl -s \"https://api.github.com/repos/Ashraf-Saleh/itqan_whatsapp_ai_mvp/actions/workflows\")",
-      "Bash(curl -s \"https://api.github.com/repos/Ashraf-Saleh/itqan_whatsapp_ai_mvp/actions/runs?per_page=5\")"
+      "Bash(curl -s \"https://api.github.com/repos/Ashraf-Saleh/itqan_whatsapp_ai_mvp/actions/runs?per_page=5\")",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -c 'import fastapi, sqlalchemy; print\\('\\\\''deps ok'\\\\''\\)')",
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -c 'from app.main import app; print\\('\\\\''OK'\\\\'', [r.path for r in app.routes if '\\\\''logs'\\\\'' in r.path]\\)')"
     ]
   }
 }

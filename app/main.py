@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from .agent import process_message, save_message
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
-from .logging_config import configure_logging
+from .logging_config import LOG_FILE, configure_logging
 from .messaging import MetaAPIError, MetaWhatsAppClient
 from .messaging.meta import normalize_meta_phone
 from .models import Contact, LocalTemplate, Message, Unit
@@ -305,6 +305,24 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         processed += 1
 
     return {"status": "received", "processed_messages": processed, "status_updates": len(statuses)}
+
+
+LOG_TAIL_MAX_BYTES = 200_000
+
+
+@app.get("/api/logs", dependencies=[Depends(require_admin)])
+def tail_logs(lines: int = Query(default=300, le=2000)):
+    """Return the most recent lines from the rotating app log file, for a
+    browser-based log viewer (helpful on hosts like Render where the
+    dashboard's own log UI isn't otherwise reachable from this app)."""
+    if not LOG_FILE.exists():
+        return {"lines": []}
+    with LOG_FILE.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - LOG_TAIL_MAX_BYTES))
+        data = f.read().decode("utf-8", errors="replace")
+    return {"lines": data.splitlines()[-lines:]}
 
 
 @app.get("/api/debug/last-payload", dependencies=[Depends(require_admin)])

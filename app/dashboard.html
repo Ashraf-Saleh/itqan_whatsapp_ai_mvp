@@ -43,6 +43,13 @@ tr.lead-row:hover{background:#f8fafc}
 .tpl-item{border:1px solid #eee;border-radius:8px;padding:8px;margin:6px 0}
 .tpl-item .tpl-name{font-weight:bold}
 .tpl-item .tpl-body{font-size:12px;color:#556;white-space:pre-wrap;margin:4px 0}
+.term{background:#0d1117;color:#c9d1d9;font-family:'Consolas','Menlo',monospace;font-size:12px;height:320px;overflow:auto;border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-all}
+.term .line{border-bottom:1px solid #ffffff08;padding:1px 0}
+.term .lvl-ERROR{color:#ff7b72}
+.term .lvl-WARNING{color:#e3b341}
+.term .lvl-INFO{color:#7ee787}
+.term-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.term-header .small{color:#889}
 @media(max-width:900px){.cols{grid-template-columns:1fr}}
 </style>
 </head>
@@ -139,6 +146,17 @@ tr.lead-row:hover{background:#f8fafc}
     <button class="secondary" onclick="addRecipient()">+ Add recipient</button>
     <button onclick="sendBulk()">Send template to all</button>
     <div id="bulkStatus" class="small"></div>
+  </div>
+
+  <div class="card">
+    <div class="term-header">
+      <h2 style="margin:0">🖥️ Server Logs</h2>
+      <span class="small">
+        <label><input type="checkbox" id="logsAutoScroll" checked style="width:auto;margin:0 4px 0 0">Auto-scroll</label>
+        <label style="margin-left:12px"><input type="checkbox" id="logsPaused" style="width:auto;margin:0 4px 0 0">Pause</label>
+      </span>
+    </div>
+    <div id="logsTerm" class="term"></div>
   </div>
 </div>
 
@@ -432,10 +450,28 @@ async function sendBulk(){
 document.getElementById('sandboxInput').addEventListener('keydown', e => sandboxInput_keydown(e));
 document.getElementById('freeTextInput').addEventListener('keydown', e => freeTextInput_keydown(e));
 
+// ---------- Server logs ----------
+const LEVEL_RE = /\b(ERROR|WARNING|INFO|CRITICAL)\b/;
+async function refreshLogs(){
+  if(logsPaused.checked) return;
+  const r = await fetch('/api/logs?lines=300', { headers: { 'X-API-Key': key.value } });
+  if(!r.ok) return;
+  const d = await r.json();
+  const nearBottom = logsTerm.scrollTop + logsTerm.clientHeight >= logsTerm.scrollHeight - 30;
+  logsTerm.innerHTML = d.lines.map(l => {
+    const m = l.match(LEVEL_RE);
+    const cls = m ? `lvl-${m[1] === 'CRITICAL' ? 'ERROR' : m[1]}` : '';
+    return `<div class="line ${cls}">${escapeHtml(l)}</div>`;
+  }).join('') || '<div class="line small">No log lines yet.</div>';
+  if(logsAutoScroll.checked && nearBottom) logsTerm.scrollTop = logsTerm.scrollHeight;
+}
+
 addRecipient();
 refreshLeads();
 refreshTemplates();
 newSandboxChat();
+refreshLogs();
+setInterval(refreshLogs, 3000);
 </script>
 </body>
 </html>
