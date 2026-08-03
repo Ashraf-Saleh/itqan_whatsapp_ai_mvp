@@ -31,6 +31,18 @@ class SimulatorRequest(BaseModel):
     name: str | None = "Test Client"
     message: str
 
+class SandboxWelcomeRequest(BaseModel):
+    """A business-initiated opener for the sandbox, simulating a Facebook/
+    Instagram lead ad handoff where the business messages first."""
+    phone: str = "+201000000001"
+    name: str | None = "Test Client"
+    welcome_message: str = Field(min_length=1, max_length=4096)
+
+class LocalTemplateCreate(BaseModel):
+    """A reusable free-text template body, not registered with Meta."""
+    name: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=4096)
+
 class UnitCreate(BaseModel):
     """Validated fields required to add a property inventory unit."""
     code: str

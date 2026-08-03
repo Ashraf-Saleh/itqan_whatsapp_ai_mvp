@@ -7,6 +7,7 @@ env/
 .claude/
 __pycache__/
 *.py[cod]
+logs/
 
 # Never bake local secrets or lead data into the image.
 .env

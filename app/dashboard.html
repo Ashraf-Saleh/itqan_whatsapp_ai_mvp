@@ -1,4 +1,441 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ITQAN WhatsApp AI MVP</title><style>body{font-family:Arial;margin:0;background:#f5f7fb;color:#182033}.wrap{max-width:1200px;margin:auto;padding:24px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:#fff;padding:18px;border-radius:14px;box-shadow:0 4px 18px #0001}input,textarea,button{box-sizing:border-box;width:100%;padding:10px;margin:5px 0;border:1px solid #ccd3df;border-radius:8px}button{background:#030A8C;color:white;border:0;cursor:pointer}table{width:100%;border-collapse:collapse}th,td{padding:9px;border-bottom:1px solid #eee;text-align:left}.chat{height:330px;overflow:auto;background:#f8fafc;padding:10px;border-radius:8px}.msg{padding:9px;margin:7px;border-radius:10px;white-space:pre-wrap}.me{background:#dbeafe;margin-left:20%}.bot{background:#e9f7ef;margin-right:20%}.small{font-size:12px;color:#667}@media(max-width:850px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><h1>ITQAN WhatsApp Real Estate AI MVP</h1><p>Test locally first, then connect Meta Cloud API.</p><div class="grid"><div class="card"><h2>Bulk Template Outreach</h2><div id="recipients"></div><button onclick="addRecipient()" style="background:#eef1fa;color:#030A8C">+ Add recipient</button><button onclick="sendBulk()">Send template to all</button><div id="bulkStatus" class="small"></div></div><div class="card"><h2>Local Simulator</h2><input id="key" type="password" value="change-me-now" placeholder="Admin API key"><input id="phone" value="+201000000001"><textarea id="message" placeholder="e.g. عايز شقة في التجمع الخامس"></textarea><button onclick="sendMsg()">Send to AI</button><div id="status" class="small"></div><div id="chat" class="chat"></div></div><div class="card"><h2>Lead Pipeline</h2><button onclick="loadLeads()">Refresh leads</button><div style="overflow:auto"><table><thead><tr><th>Name</th><th>Phone</th><th>Status</th><th>Requirements</th></tr></thead><tbody id="rows"></tbody></table></div></div></div></div><script>const headers=()=>({'X-API-Key':key.value,'Content-Type':'application/json'});function add(c,t){chat.innerHTML+=`<div class="msg ${c}">${t.replaceAll('<','&lt;')}</div>`;chat.scrollTop=chat.scrollHeight}async function sendMsg(){let m=message.value.trim();if(!m)return;add('me',m);message.value='';let r=await fetch('/api/simulator/message',{method:'POST',headers:headers(),body:JSON.stringify({phone:phone.value,name:'Test Client',message:m})});let d=await r.json();if(!r.ok){add('bot',JSON.stringify(d));return}add('bot',d.reply);status.textContent=`Status: ${d.status} | Handoff: ${d.handoff}`;loadLeads()}async function loadLeads(){let r=await fetch('/api/leads',{headers:{'X-API-Key':key.value}});if(!r.ok){alert('Check API key');return}let d=await r.json();rows.innerHTML=d.map(x=>`<tr><td>${x.name||''}</td><td>${x.phone}</td><td>${x.status}</td><td>${[x.job,x.education,x.location,x.unit_type,x.unit_size?`${x.unit_size}m2`:null,(x.budget_min||x.budget_max)?`${x.budget_min||'?'}-${x.budget_max||'?'} EGP`:null].filter(Boolean).join(' · ')}</td></tr>`).join('')}
-function addRecipient(){const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center';row.innerHTML=`<input class="r-phone" placeholder="+201000000001" style="flex:2"><input class="r-name" placeholder="Recipient name" style="flex:2"><button onclick="this.parentElement.remove()" style="flex:0 0 auto;width:auto;padding:10px 14px;background:#c0392b">&times;</button>`;recipients.appendChild(row)}
-async function sendBulk(){const rowsEl=[...recipients.children];const list=rowsEl.map(row=>({phone:row.querySelector('.r-phone').value.trim(),name:row.querySelector('.r-name').value.trim()})).filter(r=>r.phone&&r.name);if(!list.length){bulkStatus.textContent='Add at least one phone + name.';return}bulkStatus.textContent='Sending...';let r=await fetch('/api/outreach/bulk',{method:'POST',headers:headers(),body:JSON.stringify({recipients:list})});let d=await r.json();if(!r.ok){bulkStatus.textContent=JSON.stringify(d);return}bulkStatus.innerHTML=d.results.map(x=>`${x.status==='sent'?'✓':'✗'} ${x.phone} (${x.name})${x.detail?': '+x.detail:''}`).join('<br>');loadLeads()}
-addRecipient();loadLeads();</script></body></html>
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ITQAN WhatsApp AI MVP</title>
+<style>
+body{font-family:Arial;margin:0;background:#f5f7fb;color:#182033}
+.wrap{max-width:1300px;margin:auto;padding:24px}
+h1{margin-bottom:4px}
+.sub{color:#667;margin-top:0}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
+.card{background:#fff;padding:18px;border-radius:14px;box-shadow:0 4px 18px #0001}
+.card h2{margin-top:0}
+input,textarea,select,button{box-sizing:border-box;width:100%;padding:10px;margin:5px 0;border:1px solid #ccd3df;border-radius:8px;font-family:inherit;font-size:14px}
+button{background:#030A8C;color:#fff;border:0;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+button.secondary{background:#eef1fa;color:#030A8C}
+button.danger{background:#c0392b}
+.row{display:flex;gap:6px}
+.row>*{flex:1}
+table{width:100%;border-collapse:collapse}
+th,td{padding:9px;border-bottom:1px solid #eee;text-align:left;font-size:13px}
+tr.lead-row{cursor:pointer}
+tr.lead-row:hover{background:#f8fafc}
+.chat{height:360px;overflow:auto;background:#f8fafc;padding:10px;border-radius:8px;display:flex;flex-direction:column}
+.msg{padding:9px 12px;margin:5px 0;border-radius:10px;white-space:pre-wrap;max-width:78%;font-size:14px}
+.me{background:#dbeafe;align-self:flex-end}
+.bot{background:#e9f7ef;align-self:flex-start}
+.sys{align-self:center;background:none;color:#889;font-size:11px;padding:2px;margin:2px}
+.err{background:#fde2e1;color:#7a1f1f;align-self:flex-start}
+.msg .meta{display:block;font-size:10px;color:#889;margin-top:3px}
+.small{font-size:12px;color:#667}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+.badge-real{background:#dbeafe;color:#1d4ed8}
+.badge-sandbox{background:#fef3c7;color:#92400e}
+.tabs{display:flex;gap:6px;margin-bottom:8px}
+.tab{width:auto;padding:6px 14px;background:#eef1fa;color:#030A8C;border-radius:999px;cursor:pointer;margin:0;border:0}
+.tab.active{background:#030A8C;color:#fff}
+.chat-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.chat-header .name{font-weight:bold}
+.divider{border:0;border-top:1px solid #eee;margin:14px 0}
+.tpl-item{border:1px solid #eee;border-radius:8px;padding:8px;margin:6px 0}
+.tpl-item .tpl-name{font-weight:bold}
+.tpl-item .tpl-body{font-size:12px;color:#556;white-space:pre-wrap;margin:4px 0}
+@media(max-width:900px){.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ITQAN WhatsApp Real Estate AI MVP</h1>
+  <p class="sub">Test the AI agent against a fake number, then watch and drive real WhatsApp conversations.</p>
+
+  <div class="card" style="margin-bottom:18px">
+    <div class="row">
+      <input id="key" type="password" value="change-me-now" placeholder="Admin API key (X-API-Key)">
+      <button class="secondary" style="flex:0 0 auto;width:auto" onclick="refreshLeads()">Refresh data</button>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h2>🧪 AI Sandbox <span class="badge badge-sandbox">fake number</span></h2>
+      <p class="small">Messages here go straight to <code>process_message</code> (the real agent logic) but never touch Meta. Use this to test prompts, tools, and CRM updates safely.</p>
+      <div class="row">
+        <input id="sandboxPhone" value="+201000000001" placeholder="Fake phone number">
+        <input id="sandboxName" value="Test Client" placeholder="Fake client name">
+      </div>
+      <div class="row">
+        <button class="secondary" onclick="loadSandboxHistory()">Load history for this number</button>
+        <button class="secondary" onclick="newSandboxChat()">New chat</button>
+      </div>
+      <textarea id="welcomeMessage" rows="2">أهلاً بيك 👋 شكرًا لتواصلك معنا من خلال إعلان فيسبوك! إزاي أقدر أساعدك في إيجاد الوحدة العقارية المناسبة؟</textarea>
+      <button class="secondary" onclick="simulateFacebookLead()">🎯 Simulate Facebook Lead (business sends welcome first)</button>
+      <div id="sandboxChat" class="chat"></div>
+      <textarea id="sandboxInput" rows="2" placeholder="e.g. عايز شقة في التجمع الخامس (Enter to send, Shift+Enter for newline)"></textarea>
+      <button onclick="sendSandbox()">Send to AI</button>
+      <div id="sandboxStatus" class="small"></div>
+    </div>
+
+    <div class="card">
+      <h2>💬 Real Conversations <span class="badge badge-real">Meta webhook</span></h2>
+      <p class="small">Actual contacts created by inbound WhatsApp messages or outreach. Auto-refreshes every 5s while a lead is selected.</p>
+      <select id="realLeadSelect" onchange="selectRealLead(this.value)">
+        <option value="">Select a real lead…</option>
+      </select>
+      <div class="chat-header">
+        <span class="name" id="realLeadHeader">No lead selected</span>
+        <span class="small" id="realLeadStatus"></span>
+      </div>
+      <div id="realChat" class="chat"></div>
+      <hr class="divider">
+      <div class="row">
+        <input id="templateName" placeholder="Recipient name (for {{1}})">
+        <button style="flex:0 0 auto;width:auto" onclick="sendTemplate()">Send approved template</button>
+      </div>
+      <div id="templateStatus" class="small"></div>
+      <select id="templatePicker" onchange="applyTemplateToFreeText()">
+        <option value="">Insert saved template… ({{name}} auto-filled from this lead)</option>
+      </select>
+      <textarea id="freeTextInput" rows="2" placeholder="Send a free-form message as the business/AI (only within the 24h service window)"></textarea>
+      <button onclick="sendFreeText()">Send message</button>
+      <div id="freeTextStatus" class="small"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px">
+    <h2>📄 Message Templates <span class="small">(plain text, no Meta approval needed)</span></h2>
+    <p class="small">These are <strong>not</strong> Meta-approved Templates — they send as normal free-form text,
+      so they only work inside an open 24h customer-service window (i.e. the lead has messaged you recently).
+      For cold outreach to someone who hasn't messaged you, you must use "Send approved template" above.</p>
+    <div class="row">
+      <input id="newTemplateName" placeholder="Template title, e.g. Follow-up after call">
+    </div>
+    <textarea id="newTemplateBody" rows="2" placeholder="e.g. أهلاً {{name}}، حابب أعرف لو لسه مهتم بالوحدة اللي اتكلمنا عنها؟"></textarea>
+    <button class="secondary" onclick="saveTemplate()">Save template</button>
+    <div id="templateSaveStatus" class="small"></div>
+    <div id="templateList"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:18px">
+    <h2>Lead Pipeline</h2>
+    <div class="tabs">
+      <button class="tab active" data-filter="all" onclick="setLeadFilter('all')">All</button>
+      <button class="tab" data-filter="real" onclick="setLeadFilter('real')">Real</button>
+      <button class="tab" data-filter="sandbox" onclick="setLeadFilter('sandbox')">Sandbox</button>
+    </div>
+    <div style="overflow:auto">
+      <table>
+        <thead><tr><th>Source</th><th>Name</th><th>Phone</th><th>Status</th><th>Requirements</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Bulk Template Outreach</h2>
+    <div id="recipients"></div>
+    <button class="secondary" onclick="addRecipient()">+ Add recipient</button>
+    <button onclick="sendBulk()">Send template to all</button>
+    <div id="bulkStatus" class="small"></div>
+  </div>
+</div>
+
+<script>
+let allLeads = [];
+let allTemplates = [];
+let leadFilter = 'all';
+let sandboxContactId = null;
+let realContactId = null;
+let realPollTimer = null;
+
+function headers(){ return {'X-API-Key': key.value, 'Content-Type': 'application/json'}; }
+function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function timeOf(iso){ try{ return new Date(iso).toLocaleString(); }catch(e){ return ''; } }
+function normalizePhoneClient(p){
+  let d = (p||'').replace(/\D/g,'');
+  if(d.startsWith('00')) d = d.slice(2);
+  if(d.startsWith('0') && d.length===11) d = '20'+d.slice(1);
+  return d;
+}
+
+function renderMessages(container, messages){
+  if(!messages.length){
+    container.innerHTML = '<div class="sys">No messages yet.</div>';
+    return;
+  }
+  container.innerHTML = messages.map(m=>{
+    const time = `<span class="meta">${timeOf(m.created_at)}</span>`;
+    if(m.direction === 'inbound'){
+      return `<div class="msg me">${escapeHtml(m.body)}${time}</div>`;
+    }
+    if(m.direction === 'outbound_failed'){
+      return `<div class="msg err">${escapeHtml(m.body)}${time}</div>`;
+    }
+    if(m.direction && m.direction.startsWith('status_')){
+      return `<div class="sys">${m.direction.replace('status_','')} — ${escapeHtml(m.body)}</div>`;
+    }
+    return `<div class="msg bot">${escapeHtml(m.body)}${time}</div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function fetchLeadDetail(id){
+  const r = await fetch(`/api/leads/${id}`, { headers: { 'X-API-Key': key.value } });
+  if(!r.ok) throw new Error('Failed to load lead ' + id);
+  return r.json();
+}
+
+// ---------- Sandbox panel ----------
+function newSandboxChat(){
+  sandboxContactId = null;
+  sandboxChat.innerHTML = '';
+  sandboxStatus.textContent = 'New sandbox conversation — first message will create the contact.';
+}
+
+async function loadSandboxHistory(){
+  const phone = normalizePhoneClient(sandboxPhone.value);
+  const match = allLeads.find(l => l.source === 'sandbox' && normalizePhoneClient(l.phone) === phone);
+  if(!match){
+    sandboxStatus.textContent = 'No existing sandbox conversation for this number yet.';
+    sandboxChat.innerHTML = '';
+    sandboxContactId = null;
+    return;
+  }
+  sandboxContactId = match.id;
+  const detail = await fetchLeadDetail(match.id);
+  renderMessages(sandboxChat, detail.messages);
+  sandboxStatus.textContent = `Loaded — status: ${detail.lead.contact_status}`;
+}
+
+async function sendSandbox(){
+  const msg = sandboxInput.value.trim();
+  if(!msg) return;
+  sandboxInput.value = '';
+  sandboxStatus.textContent = 'Sending…';
+  const r = await fetch('/api/simulator/message', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({ phone: sandboxPhone.value, name: sandboxName.value || 'Test Client', message: msg }),
+  });
+  const d = await r.json();
+  if(!r.ok){ sandboxStatus.textContent = JSON.stringify(d); return; }
+  sandboxContactId = d.contact_id;
+  const detail = await fetchLeadDetail(d.contact_id);
+  renderMessages(sandboxChat, detail.messages);
+  sandboxStatus.textContent = `Status: ${d.status} | Handoff: ${d.handoff}`;
+  refreshLeads();
+}
+
+sandboxInput_keydown = (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendSandbox(); }
+};
+
+async function simulateFacebookLead(){
+  const welcome = welcomeMessage.value.trim();
+  if(!welcome) return;
+  sandboxStatus.textContent = 'Opening chat…';
+  const r = await fetch('/api/simulator/welcome', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({ phone: sandboxPhone.value, name: sandboxName.value || 'Test Client', welcome_message: welcome }),
+  });
+  const d = await r.json();
+  if(!r.ok){ sandboxStatus.textContent = JSON.stringify(d); return; }
+  sandboxContactId = d.contact_id;
+  const detail = await fetchLeadDetail(d.contact_id);
+  renderMessages(sandboxChat, detail.messages);
+  sandboxStatus.textContent = `Chat opened by the business — status: ${d.status}. Type a reply below as the customer.`;
+  refreshLeads();
+}
+
+// ---------- Real conversations panel ----------
+function populateRealLeadSelect(){
+  const reals = allLeads.filter(l => l.source === 'real');
+  const current = realLeadSelect.value;
+  realLeadSelect.innerHTML = '<option value="">Select a real lead…</option>' +
+    reals.map(l => `<option value="${l.id}">${escapeHtml(l.name || l.phone)} — ${l.phone} (${l.status})</option>`).join('');
+  if(current && reals.some(l => String(l.id) === current)) realLeadSelect.value = current;
+}
+
+async function selectRealLead(id){
+  stopRealPolling();
+  if(!id){ realContactId = null; realChat.innerHTML=''; realLeadHeader.textContent='No lead selected'; realLeadStatus.textContent=''; return; }
+  realContactId = id;
+  realLeadSelect.value = id;
+  await refreshRealChat();
+  const lead = allLeads.find(l => String(l.id) === String(id));
+  if(lead) templateName.value = lead.name || '';
+  startRealPolling();
+}
+
+async function refreshRealChat(){
+  if(!realContactId) return;
+  const detail = await fetchLeadDetail(realContactId);
+  realLeadHeader.textContent = detail.lead.name || detail.lead.phone;
+  realLeadStatus.textContent = `${detail.lead.phone} · ${detail.lead.contact_status}${detail.lead.opted_out ? ' · OPTED OUT' : ''}`;
+  renderMessages(realChat, detail.messages);
+}
+
+function startRealPolling(){
+  realPollTimer = setInterval(refreshRealChat, 5000);
+}
+function stopRealPolling(){
+  if(realPollTimer) clearInterval(realPollTimer);
+  realPollTimer = null;
+}
+
+async function sendTemplate(){
+  if(!realContactId){ templateStatus.textContent = 'Select a real lead first.'; return; }
+  const lead = allLeads.find(l => String(l.id) === String(realContactId));
+  const name = templateName.value.trim() || (lead && lead.name) || '';
+  if(!name){ templateStatus.textContent = 'Name is required for the template variable.'; return; }
+  templateStatus.textContent = 'Sending…';
+  const r = await fetch('/api/outreach', { method:'POST', headers: headers(), body: JSON.stringify({ phone: lead.phone, name }) });
+  const d = await r.json();
+  templateStatus.textContent = r.ok ? `Sent — message_id ${d.message_id}` : JSON.stringify(d);
+  if(r.ok) refreshRealChat();
+}
+
+async function sendFreeText(){
+  if(!realContactId){ freeTextStatus.textContent = 'Select a real lead first.'; return; }
+  const body = freeTextInput.value.trim();
+  if(!body) return;
+  const lead = allLeads.find(l => String(l.id) === String(realContactId));
+  freeTextStatus.textContent = 'Sending…';
+  const r = await fetch('/api/test-text', { method:'POST', headers: headers(), body: JSON.stringify({ phone: lead.phone, body }) });
+  const d = await r.json();
+  if(!r.ok){ freeTextStatus.textContent = JSON.stringify(d); return; }
+  freeTextInput.value = '';
+  freeTextStatus.textContent = 'Sent.';
+  refreshRealChat();
+}
+
+freeTextInput_keydown = (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendFreeText(); }
+};
+
+// ---------- Message templates (local, not Meta-approved) ----------
+function populateTemplatePicker(){
+  templatePicker.innerHTML = '<option value="">Insert saved template… ({{name}} auto-filled from this lead)</option>' +
+    allTemplates.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+}
+
+function renderTemplateList(){
+  if(!allTemplates.length){ templateList.innerHTML = '<p class="small">No templates saved yet.</p>'; return; }
+  templateList.innerHTML = allTemplates.map(t => `
+    <div class="tpl-item">
+      <div class="tpl-name">${escapeHtml(t.name)}</div>
+      <div class="tpl-body">${escapeHtml(t.body)}</div>
+      <button class="danger" style="width:auto" onclick="deleteTemplateById(${t.id})">Delete</button>
+    </div>`).join('');
+}
+
+async function refreshTemplates(){
+  const r = await fetch('/api/templates', { headers: { 'X-API-Key': key.value } });
+  if(!r.ok) return;
+  allTemplates = await r.json();
+  populateTemplatePicker();
+  renderTemplateList();
+}
+
+async function saveTemplate(){
+  const name = newTemplateName.value.trim();
+  const body = newTemplateBody.value.trim();
+  if(!name || !body){ templateSaveStatus.textContent = 'Title and body are required.'; return; }
+  const r = await fetch('/api/templates', { method:'POST', headers: headers(), body: JSON.stringify({ name, body }) });
+  const d = await r.json();
+  if(!r.ok){ templateSaveStatus.textContent = JSON.stringify(d); return; }
+  newTemplateName.value = '';
+  newTemplateBody.value = '';
+  templateSaveStatus.textContent = 'Saved.';
+  refreshTemplates();
+}
+
+async function deleteTemplateById(id){
+  await fetch(`/api/templates/${id}`, { method: 'DELETE', headers: { 'X-API-Key': key.value } });
+  refreshTemplates();
+}
+
+function applyTemplateToFreeText(){
+  const id = templatePicker.value;
+  if(!id) return;
+  const tpl = allTemplates.find(t => String(t.id) === id);
+  if(!tpl) return;
+  const lead = allLeads.find(l => String(l.id) === String(realContactId));
+  const name = (lead && lead.name) || '';
+  freeTextInput.value = tpl.body.replaceAll('{{name}}', name);
+  templatePicker.value = '';
+}
+
+// ---------- Lead pipeline ----------
+function setLeadFilter(f){
+  leadFilter = f;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+  renderLeadTable();
+}
+
+function renderLeadTable(){
+  const list = allLeads.filter(l => leadFilter === 'all' || l.source === leadFilter);
+  rows.innerHTML = list.map(x => `
+    <tr class="lead-row" onclick="openLeadFromTable(${x.id}, '${x.source}')">
+      <td><span class="badge ${x.source === 'real' ? 'badge-real' : 'badge-sandbox'}">${x.source}</span></td>
+      <td>${escapeHtml(x.name || '')}</td>
+      <td>${x.phone}</td>
+      <td>${x.status}</td>
+      <td>${[x.job, x.education, x.location, x.unit_type, x.unit_size ? `${x.unit_size}m2` : null,
+             (x.budget_min || x.budget_max) ? `${x.budget_min || '?'}-${x.budget_max || '?'} EGP` : null]
+             .filter(Boolean).join(' · ')}</td>
+    </tr>`).join('');
+}
+
+function openLeadFromTable(id, source){
+  if(source === 'real'){
+    selectRealLead(String(id));
+    window.scrollTo({top:0, behavior:'smooth'});
+  } else {
+    const lead = allLeads.find(l => l.id === id);
+    if(lead){ sandboxPhone.value = lead.phone; sandboxName.value = lead.name || ''; loadSandboxHistory(); }
+    window.scrollTo({top:0, behavior:'smooth'});
+  }
+}
+
+async function refreshLeads(){
+  const r = await fetch('/api/leads', { headers: { 'X-API-Key': key.value } });
+  if(!r.ok){ alert('Check API key'); return; }
+  allLeads = await r.json();
+  populateRealLeadSelect();
+  renderLeadTable();
+}
+
+// ---------- Bulk outreach ----------
+function addRecipient(){
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<input class="r-phone" placeholder="+201000000001"><input class="r-name" placeholder="Recipient name"><button class="danger" style="flex:0 0 auto;width:auto" onclick="this.parentElement.remove()">&times;</button>`;
+  recipients.appendChild(row);
+}
+
+async function sendBulk(){
+  const list = [...recipients.children].map(row => ({
+    phone: row.querySelector('.r-phone').value.trim(),
+    name: row.querySelector('.r-name').value.trim(),
+  })).filter(r => r.phone && r.name);
+  if(!list.length){ bulkStatus.textContent = 'Add at least one phone + name.'; return; }
+  bulkStatus.textContent = 'Sending...';
+  const r = await fetch('/api/outreach/bulk', { method:'POST', headers: headers(), body: JSON.stringify({ recipients: list }) });
+  const d = await r.json();
+  if(!r.ok){ bulkStatus.textContent = JSON.stringify(d); return; }
+  bulkStatus.innerHTML = d.results.map(x => `${x.status==='sent'?'✓':'✗'} ${x.phone} (${x.name})${x.detail ? ': '+x.detail : ''}`).join('<br>');
+  refreshLeads();
+}
+
+document.getElementById('sandboxInput').addEventListener('keydown', e => sandboxInput_keydown(e));
+document.getElementById('freeTextInput').addEventListener('keydown', e => freeTextInput_keydown(e));
+
+addRecipient();
+refreshLeads();
+refreshTemplates();
+newSandboxChat();
+</script>
+</body>
+</html>

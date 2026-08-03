@@ -11,7 +11,6 @@ from functools import lru_cache
 import logging
 from pathlib import Path
 import re
-import traceback
 
 from sqlalchemy.orm import Session
 
@@ -347,9 +346,8 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
             ),
         )
         reply = (response.text or "").strip()
-    except Exception as e:
-        logger.error("GEMINI ERROR for contact_id=%s: %s", contact.id, e)
-        traceback.print_exc()
+    except Exception:
+        logger.exception("GEMINI ERROR for contact_id=%s", contact.id)
         reply = ""
 
     if not reply:

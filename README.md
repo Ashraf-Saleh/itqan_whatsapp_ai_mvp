@@ -60,6 +60,10 @@ Detailed documentation:
 
 Windows users can activate the environment and run `run_windows.bat`.
 
+Every request, webhook payload, and error is printed to the console and also
+persisted to `logs/app.log` (rotated at 5 MB, 5 backups kept), so a live
+`tail`/`Get-Content -Wait` and a permanent record are always both available.
+
 ## Deploy to Render
 
 `render.yaml` defines a Docker web service plus a managed Postgres database as

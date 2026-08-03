@@ -13,7 +13,6 @@ import hashlib
 import hmac
 import json
 import logging
-import traceback
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -23,13 +22,17 @@ from sqlalchemy.orm import Session
 from .agent import process_message, save_message
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
+from .logging_config import configure_logging
 from .messaging import MetaAPIError, MetaWhatsAppClient
 from .messaging.meta import normalize_meta_phone
-from .models import Contact, Message, Unit
-from .schemas import BulkOutreachRequest, OutreachRequest, SimulatorRequest, TestTextRequest, UnitCreate
+from .models import Contact, LocalTemplate, Message, Unit
+from .schemas import (
+    BulkOutreachRequest, LocalTemplateCreate, OutreachRequest, SandboxWelcomeRequest,
+    SimulatorRequest, TestTextRequest, UnitCreate,
+)
 from .seed import seed_units
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+configure_logging()
 logger = logging.getLogger("app.main")
 
 settings = get_settings()
@@ -146,6 +149,15 @@ def record_status_events(db: Session, statuses: list[dict]) -> None:
             save_message(db, outbound.contact, direction, body, message_id)
 
 
+def lead_source(contact: Contact) -> str:
+    """Classify a contact as "real" (has at least one non-simulator message id)
+    or "sandbox" (only ever exchanged messages through the local simulator)."""
+    for message in contact.messages:
+        if message.message_sid and not message.message_sid.startswith("sim-"):
+            return "real"
+    return "sandbox"
+
+
 def get_or_create_contact(db: Session, phone: str, name: str) -> Contact:
     """Find an outreach contact or create it without claiming a message was sent."""
     contact = db.query(Contact).filter(Contact.phone == phone).first()
@@ -216,14 +228,17 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid JSON") from exc
 
     LAST_PAYLOADS.append(payload)
-    print(f"[webhook] RAW PAYLOAD: {json.dumps(payload, ensure_ascii=False)}")
+    logger.info("RAW PAYLOAD: %s", json.dumps(payload, ensure_ascii=False))
 
     statuses = extract_status_events(payload)
     events = extract_message_events(payload)
     record_status_events(db, statuses)
-    print(f"[webhook] extracted {len(events)} message event(s), {len(statuses)} status update(s)")
+    logger.info("extracted %d message event(s), %d status update(s)", len(events), len(statuses))
     for event in events:
-        print(f"[webhook] event: phone={event['phone']} message_id={event['message_id']} body={event['body']!r}")
+        logger.info(
+            "event: phone=%s message_id=%s body=%r",
+            event["phone"], event["message_id"], event["body"],
+        )
 
     client = None
     if events:
@@ -236,7 +251,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     for event in events:
         phone = normalize_meta_phone(event["phone"])
         if not phone or not event["message_id"]:
-            print(f"[webhook] SKIPPED event with missing phone/message_id: {event}")
+            logger.warning("SKIPPED event with missing phone/message_id: %s", event)
             continue
 
         # Meta retries webhooks for the same inbound message; skip reprocessing those,
@@ -247,7 +262,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             .first()
         )
         if duplicate:
-            print(f"[webhook] DUPLICATE SKIPPED message_id={event['message_id']} phone={phone}")
+            logger.info("DUPLICATE SKIPPED message_id=%s phone=%s", event["message_id"], phone)
             continue
 
         contact = db.query(Contact).filter(Contact.phone == phone).first()
@@ -265,14 +280,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
         try:
             result = process_message(db, contact, event["body"])
         except Exception:
-            logger.error("process_message failed for contact_id=%s", contact.id)
-            traceback.print_exc()
+            logger.exception("process_message failed for contact_id=%s", contact.id)
             save_message(db, contact, "outbound_failed", "ERROR: process_message raised an exception, see server logs")
             processed += 1
             continue
 
         if client is None:
-            print(f"[webhook] no Meta client available, cannot send reply to {phone}")
+            logger.warning("no Meta client available, cannot send reply to %s", phone)
             save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: Meta client not configured")
             processed += 1
             continue
@@ -281,13 +295,12 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             response = await client.send_text(phone, result.reply, reply_to_message_id=event["message_id"])
             outbound_id = (response.get("messages") or [{}])[0].get("id")
             save_message(db, contact, "outbound", result.reply, outbound_id)
-            print(f"[webhook] reply sent to {phone} message_id={outbound_id}")
+            logger.info("reply sent to %s message_id=%s", phone, outbound_id)
         except MetaAPIError as exc:
             logger.error("send_text failed for phone=%s: %s", phone, exc)
             save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: {exc}")
         except Exception:
-            logger.error("Unexpected error sending reply to phone=%s", phone)
-            traceback.print_exc()
+            logger.exception("Unexpected error sending reply to phone=%s", phone)
             save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: unexpected exception, see server logs")
         processed += 1
 
@@ -353,12 +366,17 @@ async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends
 async def send_test_text(payload: TestTextRequest, db: Session = Depends(get_db)):
     """Send free-form text. Use only after the recipient has messaged the business."""
     phone = normalize_meta_phone(payload.phone)
-    body = payload.body
+    if not phone:
+        raise HTTPException(status_code=422, detail="Invalid phone number")
+    contact = get_or_create_contact(db, phone, None)
     try:
-        response = await MetaWhatsAppClient().send_text(phone, body)
+        response = await MetaWhatsAppClient().send_text(phone, payload.body)
     except MetaAPIError as exc:
+        save_message(db, contact, "outbound_failed", payload.body)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"status": "accepted", "to": phone, "meta_response": response}
+    message_id = (response.get("messages") or [{}])[0].get("id")
+    save_message(db, contact, "outbound", payload.body, message_id)
+    return {"status": "accepted", "to": phone, "meta_response": response, "contact_id": contact.id}
 
 
 @app.post("/api/simulator/message", dependencies=[Depends(require_admin)])
@@ -378,12 +396,32 @@ def simulator_message(payload: SimulatorRequest, db: Session = Depends(get_db)):
     return {"reply": result.reply, "handoff": result.handoff, "status": contact.contact_status, "contact_id": contact.id}
 
 
+@app.post("/api/simulator/welcome", dependencies=[Depends(require_admin)])
+def simulator_welcome(payload: SandboxWelcomeRequest, db: Session = Depends(get_db)):
+    """Open a sandbox chat with a business-sent welcome message, simulating a
+    Facebook/Instagram lead ad handoff where the business messages first."""
+    phone = normalize_meta_phone(payload.phone)
+    contact = db.query(Contact).filter(Contact.phone == phone).first()
+    if not contact:
+        contact = Contact(phone=phone, name=payload.name)
+        db.add(contact)
+        db.commit()
+        db.refresh(contact)
+    if not contact.notes:
+        contact.notes = "Simulated: Facebook/Instagram lead ad welcome flow"
+        db.commit()
+    save_message(db, contact, "outbound", payload.welcome_message, f"sim-out-{contact.id}-{len(contact.messages)+1}")
+    db.refresh(contact)
+    return {"status": contact.contact_status, "contact_id": contact.id}
+
+
 @app.get("/api/leads", dependencies=[Depends(require_admin)])
 def list_leads(db: Session = Depends(get_db)):
     """List leads in descending order of their most recent update."""
     contacts = db.query(Contact).order_by(Contact.updated_at.desc()).all()
     return [{
         "id": c.id, "name": c.name, "phone": c.phone, "status": c.contact_status,
+        "source": lead_source(c),
         "job": c.job, "education": c.education, "location": c.location,
         "budget_min": c.budget_min, "budget_max": c.budget_max,
         "unit_size": c.unit_size, "unit_type": c.unit_type,
@@ -400,14 +438,46 @@ def lead_detail(contact_id: int, db: Session = Depends(get_db)):
     if not c:
         raise HTTPException(status_code=404, detail="Lead not found")
     messages = db.query(Message).filter(Message.contact_id == c.id).order_by(Message.created_at).all()
+    lead = {k: getattr(c, k) for k in [
+        "id", "name", "phone", "contact_phone", "contact_status", "job", "education",
+        "location", "budget_min", "budget_max", "unit_size", "unit_type",
+        "assigned_to", "opted_out", "scheduled_call_start", "scheduled_call_end", "notes",
+    ]}
+    lead["source"] = lead_source(c)
     return {
-        "lead": {k: getattr(c, k) for k in [
-            "id", "name", "phone", "contact_phone", "contact_status", "job", "education",
-            "location", "budget_min", "budget_max", "unit_size", "unit_type",
-            "assigned_to", "opted_out", "scheduled_call_start", "scheduled_call_end", "notes",
-        ]},
+        "lead": lead,
         "messages": [{"direction": m.direction, "body": m.body, "message_id": m.message_sid, "created_at": m.created_at} for m in messages],
     }
+
+
+@app.get("/api/templates", dependencies=[Depends(require_admin)])
+def list_templates(db: Session = Depends(get_db)):
+    """List local free-text templates (not registered with Meta)."""
+    templates = db.query(LocalTemplate).order_by(LocalTemplate.created_at.desc()).all()
+    return [{"id": t.id, "name": t.name, "body": t.body, "created_at": t.created_at} for t in templates]
+
+
+@app.post("/api/templates", dependencies=[Depends(require_admin)])
+def create_template(payload: LocalTemplateCreate, db: Session = Depends(get_db)):
+    """Save a reusable free-text template body, e.g. containing {{name}}."""
+    if db.query(LocalTemplate).filter(LocalTemplate.name == payload.name).first():
+        raise HTTPException(status_code=409, detail="A template with this name already exists")
+    template = LocalTemplate(name=payload.name, body=payload.body)
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return {"id": template.id, "name": template.name, "body": template.body}
+
+
+@app.delete("/api/templates/{template_id}", dependencies=[Depends(require_admin)])
+def delete_template(template_id: int, db: Session = Depends(get_db)):
+    """Delete a local free-text template."""
+    template = db.get(LocalTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    db.delete(template)
+    db.commit()
+    return {"deleted": True, "id": template_id}
 
 
 @app.post("/api/units", dependencies=[Depends(require_admin)])

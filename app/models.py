@@ -48,6 +48,17 @@ class Message(Base):
     contact: Mapped[Contact] = relationship(back_populates="messages")
 
 
+class LocalTemplate(Base):
+    """A reusable free-text message body (with a {{name}} placeholder) sent as
+    plain text - not a Meta-approved Template, so it only works inside an open
+    24h customer-service window."""
+    __tablename__ = "local_templates"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Unit(Base):
     """A searchable real-estate unit imported from the inventory JSON file."""
     __tablename__ = "units"
