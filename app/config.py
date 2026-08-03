@@ -1,13 +1,20 @@
+"""Application configuration loaded from environment variables.
+
+The module exposes the :class:`Settings` model and a cached ``get_settings``
+factory used by the API, database, AI agent, and Meta client.
+"""
+
 import logging
 from functools import lru_cache
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("app.config")
 
 
 class Settings(BaseSettings):
+    """Typed runtime configuration for the complete application."""
     app_name: str = "WhatsApp Real Estate AI MVP - Meta Cloud API"
     app_base_url: str = "http://localhost:8000"
     admin_api_key: str = "change-me-now"
@@ -20,8 +27,9 @@ class Settings(BaseSettings):
     meta_app_secret: str = ""
     meta_validate_signature: bool = True
     meta_graph_api_version: str = "v26.0"
-    meta_test_template_name: str = "hello_world"
-    meta_test_template_language: str = "en_US"
+    meta_test_template_name: str = "itqan_lead_outreach"
+    meta_test_template_language: str = "ar"
+    meta_template_parameter_count: int = Field(default=1, ge=0, le=1)
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -50,6 +58,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_required_keys(self):
+        """Warn about optional integrations that cannot work when unconfigured."""
         if not self.gemini_api_key:
             logger.warning(
                 "GEMINI_API_KEY is empty — the AI agent will fall back to a static reply for every message."
@@ -63,4 +72,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """Return one cached settings instance for the current process."""
     return Settings()

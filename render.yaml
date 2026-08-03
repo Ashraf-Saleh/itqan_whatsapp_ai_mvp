@@ -1,0 +1,54 @@
+databases:
+  - name: itqan-whatsapp-db
+    plan: free # Render free Postgres expires ~30 days after creation - upgrade before then.
+    databaseName: itqan_whatsapp
+    user: itqan
+
+services:
+  - type: web
+    name: itqan-whatsapp-ai-mvp
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free # WARNING: spins down when idle; real webhook messages can be dropped
+    # during cold start. Switch to `starter` (or higher) before going live with
+    # real customer traffic - see README "Production checklist".
+    healthCheckPath: /health
+    envVars:
+      - key: APP_NAME
+        value: ITQAN WhatsApp Real Estate AI MVP
+      - key: DATABASE_URL
+        fromDatabase:
+          name: itqan-whatsapp-db
+          property: connectionString
+      - key: ADMIN_API_KEY
+        sync: false # set a strong random value in the Render dashboard
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_PHONE_NUMBER_ID
+        sync: false
+      - key: META_WABA_ID
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_VALIDATE_SIGNATURE
+        value: "true" # publicly reachable webhook - keep signature validation on
+      - key: META_GRAPH_API_VERSION
+        value: v26.0
+      - key: META_TEST_TEMPLATE_NAME
+        value: itqan_lead_outreach
+      - key: META_TEST_TEMPLATE_LANGUAGE
+        value: ar
+      - key: META_TEMPLATE_PARAMETER_COUNT
+        value: "1"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: HUMAN_SALES_NAME
+        value: ITQAN Sales Team
+      - key: HUMAN_SALES_PHONE
+        value: "+201000000000"
+      - key: COMPANY_NAME
+        value: ITQAN Real Estate

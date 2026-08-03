@@ -1,3 +1,9 @@
+"""Small asynchronous client for the Meta WhatsApp Cloud API.
+
+Only transport concerns live here: phone normalization, payload construction,
+HTTP submission, and conversion of Meta error responses into ``MetaAPIError``.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -11,11 +17,16 @@ logger = logging.getLogger("app.messaging.meta")
 
 
 class MetaAPIError(RuntimeError):
+    """Raised when Meta configuration is missing or the Graph API rejects a call."""
+
     pass
 
 
 class MetaWhatsAppClient:
+    """Send text and approved template messages through WhatsApp Cloud API."""
+
     def __init__(self) -> None:
+        """Build the Graph API endpoint and authorization headers."""
         if not settings.meta_access_token or not settings.meta_phone_number_id:
             raise MetaAPIError("Meta access token or phone number ID is not configured")
         self.url = (
@@ -28,6 +39,7 @@ class MetaWhatsAppClient:
         }
 
     async def _send(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST a message payload and return Meta's decoded JSON response."""
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(self.url, headers=self.headers, json=payload)
         try:
@@ -43,6 +55,7 @@ class MetaWhatsAppClient:
         return data
 
     async def send_text(self, to: str, body: str, reply_to_message_id: str | None = None) -> dict[str, Any]:
+        """Send free-form text, optionally as a reply to an inbound message."""
         payload: dict[str, Any] = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -68,6 +81,11 @@ class MetaWhatsAppClient:
         language_code: str = "en_US",
         body_params: list[str] | None = None,
     ) -> dict[str, Any]:
+        """Send an approved template with ordered body text parameters."""
+        if not template_name.strip():
+            raise MetaAPIError("Template name cannot be empty")
+        if not language_code.strip():
+            raise MetaAPIError("Template language code cannot be empty")
         payload = {
             "messaging_product": "whatsapp",
             "to": normalize_meta_phone(to),
@@ -85,6 +103,7 @@ class MetaWhatsAppClient:
 
 
 def normalize_meta_phone(phone: str) -> str:
+    """Normalize international and Egyptian local numbers to Meta's digit format."""
     digits = "".join(ch for ch in phone if ch.isdigit())
     if digits.startswith("00"):
         digits = digits[2:]

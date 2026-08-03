@@ -32,7 +32,8 @@
       "Bash(python -c \"import starlette, os; print\\(os.path.dirname\\(starlette.__file__\\)\\)\")",
       "Bash(python3 -c \"import starlette, os; print\\(os.path.dirname\\(starlette.__file__\\)\\)\")",
       "Bash(.venv/Scripts/python.exe -m py_compile app/config.py app/messaging/meta.py app/main.py app/agent.py)",
-      "Bash(\"/c/Program Files/Inkscape/bin/python.exe\" -m py_compile app/config.py app/messaging/meta.py app/main.py app/agent.py)"
+      "Bash(\"/c/Program Files/Inkscape/bin/python.exe\" -m py_compile app/config.py app/messaging/meta.py app/main.py app/agent.py)",
+      "Bash(\"/c/Program Files/Inkscape/bin/python.exe\" -m py_compile app/database.py)"
     ]
   }
 }

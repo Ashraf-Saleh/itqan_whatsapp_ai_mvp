@@ -1,0 +1,19 @@
+.git/
+.venv/
+venv/
+env/
+.pytest_cache/
+.vscode/
+.claude/
+__pycache__/
+*.py[cod]
+
+# Never bake local secrets or lead data into the image.
+.env
+.env.*
+data/*.db
+data/*.sqlite3
+
+docs/
+tests/
+README.md

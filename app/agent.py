@@ -1,3 +1,10 @@
+"""Gemini-backed real-estate conversation and CRM tool implementation.
+
+The module builds the AI system instruction, exposes deterministic inventory
+and CRM operations to Gemini, implements opt-in/opt-out controls, and stores
+conversation messages.
+"""
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
@@ -28,24 +35,29 @@ ALLOWED_STATUSES = {
 
 @dataclass
 class AgentResult:
+    """The assistant reply and whether the lead was handed to a human."""
     reply: str
     handoff: bool = False
 
 
 def normalize(text: str) -> str:
+    """Lowercase text and collapse whitespace for command matching."""
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
 def contains_any(text: str, words) -> bool:
+    """Return whether normalized text contains any supplied phrase."""
     return any(word in text for word in words)
 
 
 @lru_cache
 def _load_system_message_template() -> str:
+    """Read and cache the system-message Markdown template from disk."""
     return SYSTEM_MESSAGE_PATH.read_text(encoding="utf-8")
 
 
 def build_system_instruction() -> str:
+    """Build the system instruction with company identity and current time."""
     template = _load_system_message_template().replace("[Agency Name]", settings.company_name)
     now = datetime.now()
     return (
@@ -67,11 +79,13 @@ def rank_units(
     size_max: float | None = None,
     limit: int = 5,
 ) -> list[Unit]:
+    """Rank active inventory by the supplied preferences and return best fits."""
     units = db.query(Unit).filter(Unit.active.is_(True)).all()
     if not units:
         return []
 
     def score(u: Unit) -> int:
+        """Compute a simple weighted preference score for one active unit."""
         s = 0
         if location:
             loc = location.strip().lower()
@@ -97,6 +111,7 @@ def rank_units(
 
 
 def unit_to_dict(u: Unit) -> dict:
+    """Convert a unit ORM object into the dictionary exposed to Gemini."""
     return {
         "project_name": u.project_name,
         "location": u.location,
@@ -121,6 +136,7 @@ def update_client_fields(
     unit_size: float | None = None,
     unit_type: str | None = None,
 ) -> dict:
+    """Update only non-null lead fields and return the current field values."""
     updates = {
         "name": name, "contact_phone": contact_phone, "job": job, "education": education,
         "budget_min": budget_min, "budget_max": budget_max, "location": location,
@@ -133,12 +149,14 @@ def update_client_fields(
 
 
 def resolve_call_window(date: str, start_time: str, end_time: str | None = None) -> tuple[datetime, datetime]:
+    """Parse a confirmed call window, defaulting its duration to 30 minutes."""
     start_dt = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
     end_dt = datetime.strptime(f"{date} {end_time}", "%Y-%m-%d %H:%M") if end_time else start_dt + timedelta(minutes=30)
     return start_dt, end_dt
 
 
 def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
+    """Process one inbound message using compliance rules and the Gemini agent."""
     text = normalize(body)
 
     if contains_any(text, STOP_WORDS):
@@ -341,5 +359,6 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
 
 
 def save_message(db: Session, contact: Contact, direction: str, body: str, sid: str | None = None) -> None:
+    """Persist one conversation or delivery-status event and commit it."""
     db.add(Message(contact_id=contact.id, direction=direction, body=body, message_sid=sid))
     db.commit()

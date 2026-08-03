@@ -1,22 +1,38 @@
+"""Pydantic request schemas used by the public and administrative API."""
+
 from pydantic import BaseModel, Field
 
 class OutreachRequest(BaseModel):
+    """One recipient for a template outreach or a free-form test message."""
+
     phone: str
-    name: str | None = None
+    name: str = Field(min_length=1, max_length=160)
 
 class OutreachRecipient(BaseModel):
+    """A named recipient in a bulk template outreach request."""
+
     phone: str
-    name: str
+    name: str = Field(min_length=1, max_length=160)
 
 class BulkOutreachRequest(BaseModel):
-    recipients: list[OutreachRecipient]
+    """A bounded collection of recipients for one bulk send operation."""
+
+    recipients: list[OutreachRecipient] = Field(min_length=1, max_length=100)
+
+class TestTextRequest(BaseModel):
+    """Diagnostic free-form text sent only inside an open service window."""
+
+    phone: str
+    body: str = Field(min_length=1, max_length=4096)
 
 class SimulatorRequest(BaseModel):
+    """An inbound message submitted through the local browser simulator."""
     phone: str = "+201000000001"
     name: str | None = "Test Client"
     message: str
 
 class UnitCreate(BaseModel):
+    """Validated fields required to add a property inventory unit."""
     code: str
     project_name: str
     location: str

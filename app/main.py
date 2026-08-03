@@ -1,3 +1,10 @@
+"""FastAPI entry point for webhooks, outreach, simulation, and lead management.
+
+This module wires the database, Gemini agent, Meta Cloud API client, and local
+dashboard into one HTTP application. Administrative endpoints require the
+``X-API-Key`` header; Meta webhooks use signature verification in production.
+"""
+
 from __future__ import annotations
 
 from collections import deque
@@ -19,7 +26,7 @@ from .database import Base, SessionLocal, engine, get_db
 from .messaging import MetaAPIError, MetaWhatsAppClient
 from .messaging.meta import normalize_meta_phone
 from .models import Contact, Message, Unit
-from .schemas import BulkOutreachRequest, OutreachRequest, SimulatorRequest, UnitCreate
+from .schemas import BulkOutreachRequest, OutreachRequest, SimulatorRequest, TestTextRequest, UnitCreate
 from .seed import seed_units
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -33,6 +40,7 @@ LAST_PAYLOADS: deque[dict] = deque(maxlen=5)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Create database tables and synchronize inventory during application startup."""
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
@@ -46,11 +54,13 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 
 def require_admin(x_api_key: str = Header(default="")):
+    """Reject administrative requests that do not contain the configured API key."""
     if not hmac.compare_digest(x_api_key, settings.admin_api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 def verify_meta_signature(raw_body: bytes, signature_header: str | None) -> None:
+    """Validate Meta's SHA-256 webhook signature when validation is enabled."""
     if not settings.meta_validate_signature:
         return
     if not settings.meta_app_secret:
@@ -65,6 +75,7 @@ def verify_meta_signature(raw_body: bytes, signature_header: str | None) -> None
 
 
 def extract_message_events(payload: dict) -> list[dict]:
+    """Flatten supported inbound WhatsApp messages from a webhook payload."""
     events: list[dict] = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
@@ -99,6 +110,7 @@ def extract_message_events(payload: dict) -> list[dict]:
 
 
 def extract_status_events(payload: dict) -> list[dict]:
+    """Flatten message delivery-status objects from a webhook payload."""
     statuses: list[dict] = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
@@ -106,8 +118,71 @@ def extract_status_events(payload: dict) -> list[dict]:
     return statuses
 
 
+def record_status_events(db: Session, statuses: list[dict]) -> None:
+    """Persist Meta sent/delivered/read/failed events against known messages."""
+    for status in statuses:
+        message_id = status.get("id")
+        if not message_id:
+            continue
+        outbound = db.query(Message).filter(Message.message_sid == message_id).first()
+        if not outbound:
+            logger.info("Ignoring status for unknown message_id=%s", message_id)
+            continue
+        status_name = status.get("status", "unknown")
+        detail = {
+            "status": status_name,
+            "timestamp": status.get("timestamp"),
+            "recipient_id": status.get("recipient_id"),
+            "errors": status.get("errors", []),
+        }
+        body = json.dumps(detail, ensure_ascii=False)
+        direction = f"status_{status_name}"
+        duplicate = db.query(Message).filter(
+            Message.message_sid == message_id,
+            Message.direction == direction,
+            Message.body == body,
+        ).first()
+        if not duplicate:
+            save_message(db, outbound.contact, direction, body, message_id)
+
+
+def get_or_create_contact(db: Session, phone: str, name: str) -> Contact:
+    """Find an outreach contact or create it without claiming a message was sent."""
+    contact = db.query(Contact).filter(Contact.phone == phone).first()
+    if not contact:
+        contact = Contact(phone=phone, name=name)
+        db.add(contact)
+        db.commit()
+        db.refresh(contact)
+    elif name and contact.name != name:
+        contact.name = name
+        db.commit()
+    return contact
+
+
+async def send_template_to_contact(db: Session, contact: Contact, name: str) -> str | None:
+    """Send the configured outreach template and persist its accepted state."""
+    body_params = [name] if settings.meta_template_parameter_count == 1 else None
+    response = await MetaWhatsAppClient().send_template(
+        contact.phone,
+        template_name=settings.meta_test_template_name,
+        language_code=settings.meta_test_template_language,
+        body_params=body_params,
+    )
+    message_id = (response.get("messages") or [{}])[0].get("id")
+    rendered = (
+        f"[Template: {settings.meta_test_template_name}/{settings.meta_test_template_language}]"
+        f" parameters={json.dumps(body_params or [], ensure_ascii=False)}"
+    )
+    save_message(db, contact, "outbound", rendered, message_id)
+    contact.contact_status = "Outreach Sent"
+    db.commit()
+    return message_id
+
+
 @app.get("/health")
 def health():
+    """Return a lightweight service and provider readiness response."""
     return {
         "status": "ok",
         "service": settings.app_name,
@@ -122,6 +197,7 @@ def verify_webhook(
     hub_verify_token: str | None = Query(default=None, alias="hub.verify_token"),
     hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
 ):
+    """Complete Meta's GET webhook verification challenge."""
     if hub_mode == "subscribe" and hub_verify_token and hmac.compare_digest(
         hub_verify_token, settings.meta_webhook_verify_token
     ):
@@ -131,6 +207,7 @@ def verify_webhook(
 
 @app.post("/webhooks/meta/whatsapp")
 async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
+    """Receive WhatsApp messages/statuses, run the agent, and send replies."""
     raw_body = await request.body()
     verify_meta_signature(raw_body, request.headers.get("X-Hub-Signature-256"))
     try:
@@ -143,6 +220,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
     statuses = extract_status_events(payload)
     events = extract_message_events(payload)
+    record_status_events(db, statuses)
     print(f"[webhook] extracted {len(events)} message event(s), {len(statuses)} status update(s)")
     for event in events:
         print(f"[webhook] event: phone={event['phone']} message_id={event['message_id']} body={event['body']!r}")
@@ -218,44 +296,34 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
 
 @app.get("/api/debug/last-payload", dependencies=[Depends(require_admin)])
 def last_payloads():
+    """Return the last five webhook payloads held in process memory."""
     return {"count": len(LAST_PAYLOADS), "payloads": list(LAST_PAYLOADS)}
 
 
 @app.post("/api/outreach", dependencies=[Depends(require_admin)])
 async def send_outreach(payload: OutreachRequest, db: Session = Depends(get_db)):
+    """Send the configured approved template to one named, eligible contact."""
     phone = normalize_meta_phone(payload.phone)
     if not phone:
         raise HTTPException(status_code=422, detail="Invalid phone number")
 
-    contact = db.query(Contact).filter(Contact.phone == phone).first()
-    if not contact:
-        contact = Contact(phone=phone, name=payload.name, contact_status="Outreach Sent")
-        db.add(contact)
-        db.commit()
-        db.refresh(contact)
-    elif payload.name and not contact.name:
-        contact.name = payload.name
-        db.commit()
+    contact = get_or_create_contact(db, phone, payload.name)
     if contact.opted_out:
         raise HTTPException(status_code=409, detail="Contact has opted out")
 
     try:
-        response = await MetaWhatsAppClient().send_template(
-            phone,
-            template_name=settings.meta_test_template_name,
-            language_code=settings.meta_test_template_language,
-        )
+        message_id = await send_template_to_contact(db, contact, payload.name)
     except MetaAPIError as exc:
+        contact.contact_status = "Outreach Failed"
+        save_message(db, contact, "outbound_failed", str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    message_id = (response.get("messages") or [{}])[0].get("id")
-    body = f"[Template: {settings.meta_test_template_name}/{settings.meta_test_template_language}]"
-    save_message(db, contact, "outbound", body, message_id)
-    return {"status": "accepted", "message_id": message_id, "to": phone, "meta_response": response}
+    return {"status": "accepted", "message_id": message_id, "to": phone}
 
 
 @app.post("/api/outreach/bulk", dependencies=[Depends(require_admin)])
 async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends(get_db)):
+    """Send the configured template to up to 100 named recipients."""
     results = []
     for recipient in payload.recipients:
         phone = normalize_meta_phone(recipient.phone)
@@ -263,43 +331,29 @@ async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends
             results.append({"phone": recipient.phone, "name": recipient.name, "status": "failed", "detail": "Invalid phone number"})
             continue
 
-        contact = db.query(Contact).filter(Contact.phone == phone).first()
-        if not contact:
-            contact = Contact(phone=phone, name=recipient.name, contact_status="Outreach Sent")
-            db.add(contact)
-            db.commit()
-            db.refresh(contact)
-        elif recipient.name and not contact.name:
-            contact.name = recipient.name
-            db.commit()
+        contact = get_or_create_contact(db, phone, recipient.name)
         if contact.opted_out:
             results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": "Contact has opted out"})
             continue
 
         try:
-            response = await MetaWhatsAppClient().send_template(
-                phone,
-                template_name=settings.meta_test_template_name,
-                language_code=settings.meta_test_template_language,
-                body_params=[recipient.name],
-            )
+            message_id = await send_template_to_contact(db, contact, recipient.name)
         except MetaAPIError as exc:
+            contact.contact_status = "Outreach Failed"
+            save_message(db, contact, "outbound_failed", str(exc))
             results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": str(exc)})
             continue
 
-        message_id = (response.get("messages") or [{}])[0].get("id")
-        body = f"[Template: {settings.meta_test_template_name}/{settings.meta_test_template_language}] name={recipient.name}"
-        save_message(db, contact, "outbound", body, message_id)
         results.append({"phone": phone, "name": recipient.name, "status": "sent", "message_id": message_id})
 
     return {"results": results}
 
 
 @app.post("/api/test-text", dependencies=[Depends(require_admin)])
-async def send_test_text(payload: OutreachRequest, db: Session = Depends(get_db)):
+async def send_test_text(payload: TestTextRequest, db: Session = Depends(get_db)):
     """Send free-form text. Use only after the recipient has messaged the business."""
     phone = normalize_meta_phone(payload.phone)
-    body = payload.name or "مرحباً، هذه رسالة اختبار من مساعد إتقان العقاري."
+    body = payload.body
     try:
         response = await MetaWhatsAppClient().send_text(phone, body)
     except MetaAPIError as exc:
@@ -309,6 +363,7 @@ async def send_test_text(payload: OutreachRequest, db: Session = Depends(get_db)
 
 @app.post("/api/simulator/message", dependencies=[Depends(require_admin)])
 def simulator_message(payload: SimulatorRequest, db: Session = Depends(get_db)):
+    """Run an inbound message through the agent without contacting Meta."""
     phone = normalize_meta_phone(payload.phone)
     contact = db.query(Contact).filter(Contact.phone == phone).first()
     if not contact:
@@ -325,6 +380,7 @@ def simulator_message(payload: SimulatorRequest, db: Session = Depends(get_db)):
 
 @app.get("/api/leads", dependencies=[Depends(require_admin)])
 def list_leads(db: Session = Depends(get_db)):
+    """List leads in descending order of their most recent update."""
     contacts = db.query(Contact).order_by(Contact.updated_at.desc()).all()
     return [{
         "id": c.id, "name": c.name, "phone": c.phone, "status": c.contact_status,
@@ -339,6 +395,7 @@ def list_leads(db: Session = Depends(get_db)):
 
 @app.get("/api/leads/{contact_id}", dependencies=[Depends(require_admin)])
 def lead_detail(contact_id: int, db: Session = Depends(get_db)):
+    """Return one lead and its complete chronological conversation."""
     c = db.get(Contact, contact_id)
     if not c:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -355,6 +412,7 @@ def lead_detail(contact_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/units", dependencies=[Depends(require_admin)])
 def create_unit(payload: UnitCreate, db: Session = Depends(get_db)):
+    """Create a validated inventory unit through the administrative API."""
     unit = Unit(**payload.model_dump())
     db.add(unit)
     db.commit()
@@ -364,4 +422,5 @@ def create_unit(payload: UnitCreate, db: Session = Depends(get_db)):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
+    """Serve the dependency-free local simulator and lead dashboard."""
     return HTMLResponse(content=(Path(__file__).with_name("dashboard.html")).read_text(encoding="utf-8"))

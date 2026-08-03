@@ -1,59 +1,134 @@
 # ITQAN WhatsApp Real Estate AI MVP
 
-A small, testable FastAPI MVP for Meta WhatsApp Cloud API. A Gemini-powered agent (driven by [`system_message.md`](system_message.md)) chats with real-estate leads in Egyptian Arabic, searches the unit inventory, saves client info, books calls, and hands qualified clients to a human sales team.
+ITQAN is a FastAPI application that connects Meta WhatsApp Cloud API to a
+Gemini-powered Egyptian-Arabic real-estate assistant. It receives leads,
+recommends inventory, stores qualification data, books calls, and hands
+conversations to the sales team.
 
-## Fastest local test (no Meta required)
+## Capabilities
 
-### Windows
-Double-click `run_windows.bat`, then open `http://localhost:8000`.
+- Receive and authenticate Meta WhatsApp webhooks.
+- Understand text, quick-reply buttons, and interactive selections.
+- Start conversations with an approved Arabic marketing template.
+- Send bulk outreach to up to 100 named recipients per request.
+- Respect application-level `STOP` and `START` commands.
+- Search and rank the local property inventory.
+- Save lead requirements, conversation history, and delivery events.
+- Escalate to sales or book a confirmed call.
+- Test locally with a browser simulator without Meta credentials.
 
-### Linux/macOS
-```bash
-./run_linux.sh
+## Architecture
+
+```text
+Meta WhatsApp -> FastAPI webhook -> compliance checks -> Gemini agent
+                                      |                  |
+                                      v                  v
+                                SQLite CRM         inventory/tools
+                                      ^
+Dashboard/API -> approved template --|
 ```
 
-Set `GEMINI_API_KEY` in `.env` (see `.env.example`) before starting the app, otherwise the agent replies with a fallback "unavailable" message. Use API key `change-me-now` in the dashboard and chat with the simulator like a real client, e.g. "عايز شقة في 6 أكتوبر".
+Detailed documentation:
 
-## Agent behavior
+- [Architecture and module guide](docs/ARCHITECTURE.md)
+- [Meta template and webhook setup](docs/META_WHATSAPP.md)
+- [API reference](docs/API.md)
+- [Configuration reference](docs/CONFIGURATION.md)
+- [Development and testing](docs/DEVELOPMENT.md)
 
-The conversational behavior, tone, and tool-usage rules live entirely in [`system_message.md`](system_message.md) — edit that file to change how the agent talks or what it asks for; no code changes needed. The agent (`app/agent.py`) loads it as the Gemini system instruction and exposes these tools, backed by the database:
+## Quick start
 
-- `search_units` — ranks the closest matches in the unit inventory (`Unit` table / `data/units.json`).
-- `save_client` — saves collected client info onto the `Contact` record.
-- `escalate_to_agent` — hands the conversation off to a human sales agent.
-- `book_call` — books a call at a confirmed date/time.
-- `update_client_status` — updates the client's CRM pipeline status.
+1. Create a virtual environment and install dependencies:
 
-`STOP`/`START` opt-out and opt-in are handled in code (not by the LLM) for compliance.
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
 
-## Docker
-```bash
-docker compose up --build
-```
-Open `http://localhost:8000`.
+2. Copy `.env.example` to `.env`, set `GEMINI_API_KEY`, and change
+   `ADMIN_API_KEY`.
 
-## Meta Cloud API configuration
-1. Create a Meta Business app and add WhatsApp.
-2. Add your phone as a test recipient.
-3. Copy the temporary access token and Phone Number ID to `.env`.
-4. Choose `META_WEBHOOK_VERIFY_TOKEN`.
-5. Expose port 8000 using ngrok or deploy the app.
-6. Configure callback URL: `https://YOUR-DOMAIN/webhooks/meta/whatsapp`.
-7. Subscribe to the `messages` webhook field.
-8. For the first test keep `META_VALIDATE_SIGNATURE=false`; once the app secret is configured, set it to `true`.
-9. Send the approved `hello_world` test template from `/docs` using `POST /api/outreach`.
+3. Start the service:
 
-## Main endpoints
-- `/` local simulator and lead dashboard
-- `/docs` interactive API documentation
-- `/health` health check
-- `GET/POST /webhooks/meta/whatsapp` Meta webhook
-- `POST /api/outreach` template outreach
-- `POST /api/simulator/message` local test
-- `GET /api/leads` lead list
+   ```bash
+   ./run_linux.sh
+   ```
 
-## Unit inventory
-Edit `data/units.json`, then restart the app. Existing units are updated by `code`.
+4. Open `http://localhost:8000` for the simulator or
+   `http://localhost:8000/docs` for OpenAPI.
 
-## Production notes
-Before real customer use, replace the temporary token, enable signature validation, use approved templates, record opt-in, configure HTTPS, change the admin key, and migrate SQLite to PostgreSQL.
+Windows users can activate the environment and run `run_windows.bat`.
+
+## Deploy to Render
+
+`render.yaml` defines a Docker web service plus a managed Postgres database as
+a Render Blueprint.
+
+1. Push this repository to GitHub/GitLab, then in the Render dashboard choose
+   **New > Blueprint** and point it at the repo. Render reads `render.yaml`
+   and provisions both resources.
+2. Fill in the `sync: false` environment variables in the web service's
+   **Environment** tab: `ADMIN_API_KEY`, `META_ACCESS_TOKEN`,
+   `META_PHONE_NUMBER_ID`, `META_WABA_ID`, `META_WEBHOOK_VERIFY_TOKEN`,
+   `META_APP_SECRET`, `GEMINI_API_KEY`. `DATABASE_URL` is wired automatically
+   from the provisioned Postgres instance.
+3. Deploy. Once live, note the service URL
+   (`https://<service-name>.onrender.com`).
+4. In the Meta App Dashboard, set the webhook callback URL to
+   `https://<service-name>.onrender.com/webhooks/meta/whatsapp` and the verify
+   token to the same value as `META_WEBHOOK_VERIFY_TOKEN`.
+5. **Subscribe the app to the WABA** — setting the callback URL alone is not
+   enough. Run:
+
+   ```bash
+   curl -X POST "https://graph.facebook.com/v26.0/<WABA_ID>/subscribed_apps" \
+     -H "Authorization: Bearer <META_ACCESS_TOKEN>"
+   ```
+
+   Verify with a GET on the same URL — the response's `data` array must
+   include your app, not just Meta's own "WA DevX Webhook Events" app. Without
+   this step, the Dashboard's "Test" button will appear to work (it injects
+   payloads directly) while real messages from customers never arrive. See
+   [docs/META_WHATSAPP.md](docs/META_WHATSAPP.md) for the full webhook setup
+   sequence.
+6. The Blueprint defaults to Render's **free** plan for both the web service
+   and the database. The free web service spins down after ~15 minutes idle
+   and cold-starts (30-60s) on the next request, which can drop or delay real
+   webhook deliveries; the free Postgres instance also expires after about 30
+   days. Upgrade both to a paid plan (`starter` or higher) before relying on
+   this for real customer traffic.
+
+## Current Meta template contract
+
+The application is configured for:
+
+- Name: `itqan_lead_outreach`
+- Language: `ar`
+- Category: Marketing
+- Body variables: one variable, `{{1}}`, containing the recipient name
+
+The Meta screenshot dated August 3, 2026 shows the template **In review** and
+its Arabic preview rendered as question marks. Do not send production outreach
+until the template preview displays real Arabic and Meta marks it Active. See
+[the remediation procedure](docs/META_WHATSAPP.md#repair-the-corrupted-arabic-template).
+
+## Production checklist
+
+- Obtain documented WhatsApp opt-in before outreach.
+- Repair and approve the Arabic marketing template.
+- Use a permanent system-user token and protect all secrets.
+- Set `META_VALIDATE_SIGNATURE=true` and configure `META_APP_SECRET`.
+- Deploy behind HTTPS and replace the default admin key.
+- Move from SQLite to managed PostgreSQL (`render.yaml` provisions this).
+- Upgrade the Render web service and database off the free plan (see
+  "Deploy to Render") so idle spin-down cannot drop real webhook traffic.
+- Add a task queue for large campaigns and Meta retry/rate-limit handling.
+- Establish retention, access-control, monitoring, and incident procedures.
+
+## Important compliance boundary
+
+The code blocks contacts who opted out in this application. It does not prove
+that a contact originally opted in. The business must maintain consent records
+and send marketing outreach only to eligible recipients under Meta policy and
+applicable law.

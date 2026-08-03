@@ -1,3 +1,5 @@
+"""Unit tests for deterministic agent, inventory, and compliance behavior."""
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -8,6 +10,7 @@ from app.agent import process_message, rank_units, resolve_call_window, update_c
 
 
 def make_db():
+    """Create and seed an isolated in-memory database for one test."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
@@ -16,6 +19,7 @@ def make_db():
 
 
 def test_opt_out():
+    """STOP opts the contact out without calling Gemini."""
     db = make_db()
     c = Contact(phone="whatsapp:+201000000002")
     db.add(c); db.commit(); db.refresh(c)
@@ -26,6 +30,7 @@ def test_opt_out():
 
 
 def test_opted_out_contact_gets_no_llm_reply_until_start():
+    """An opted-out contact receives only resubscription guidance."""
     db = make_db()
     c = Contact(phone="whatsapp:+201000000003", opted_out=True, contact_status="Opted Out")
     db.add(c); db.commit(); db.refresh(c)
@@ -35,6 +40,7 @@ def test_opted_out_contact_gets_no_llm_reply_until_start():
 
 
 def test_process_message_without_gemini_key_returns_fallback(monkeypatch):
+    """Missing Gemini configuration produces a safe fallback reply."""
     db = make_db()
     c = Contact(phone="whatsapp:+201000000004")
     db.add(c); db.commit(); db.refresh(c)
@@ -46,6 +52,7 @@ def test_process_message_without_gemini_key_returns_fallback(monkeypatch):
 
 
 def test_rank_units_prefers_location_and_type_match():
+    """Location and type carry the highest inventory ranking weights."""
     db = make_db()
     ranked = rank_units(db, location="6th of October", unit_type="apartment", budget_max=2500000)
     assert ranked
@@ -53,12 +60,14 @@ def test_rank_units_prefers_location_and_type_match():
 
 
 def test_rank_units_returns_something_even_without_exact_match():
+    """A populated portfolio returns closest alternatives for weak matches."""
     db = make_db()
     ranked = rank_units(db, location="Nowhereville", unit_type="spaceship")
     assert len(ranked) == 5
 
 
 def test_rank_units_empty_portfolio_returns_empty():
+    """An empty portfolio produces no invented unit suggestions."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
@@ -66,6 +75,7 @@ def test_rank_units_empty_portfolio_returns_empty():
 
 
 def test_update_client_fields_only_sets_given_fields():
+    """Partial CRM updates preserve fields omitted from the call."""
     db = make_db()
     c = Contact(phone="whatsapp:+201000000005", name="Ahmed")
     db.add(c); db.commit(); db.refresh(c)
@@ -75,16 +85,19 @@ def test_update_client_fields_only_sets_given_fields():
 
 
 def test_resolve_call_window_defaults_to_30_minutes():
+    """Calls without an end time default to 30 minutes."""
     start, end = resolve_call_window("2026-08-01", "17:00")
     assert start.hour == 17
     assert end.hour == 17 and end.minute == 30
 
 
 def test_resolve_call_window_uses_given_end_time():
+    """An explicitly confirmed end time is preserved."""
     start, end = resolve_call_window("2026-08-01", "17:00", "18:30")
     assert end.hour == 18 and end.minute == 30
 
 
 def test_resolve_call_window_invalid_format_raises():
+    """Relative/unparsed date formats are rejected by deterministic parsing."""
     with pytest.raises(ValueError):
         resolve_call_window("tomorrow", "5pm")
