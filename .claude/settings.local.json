@@ -76,7 +76,16 @@
       "Bash(tail -n 30 /tmp/uvicorn4.log 2>&1)",
       "Bash(curl -s http://127.0.0.1:8002/health -o /dev/null -w \"health %{http_code}\\\\n\")",
       "Bash(python3 -c \"import datetime;print\\(datetime.datetime.utcfromtimestamp\\(1785761618\\)\\)\")",
-      "Bash(.venv/Scripts/python.exe -c \"import datetime;print\\(datetime.datetime.utcfromtimestamp\\(1785761618\\)\\)\")"
+      "Bash(.venv/Scripts/python.exe -c \"import datetime;print\\(datetime.datetime.utcfromtimestamp\\(1785761618\\)\\)\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code} TIME:%{time_total}s\\\\n\" https://itqan-whatsapp-ai-mvp.onrender.com/health)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code} TIME:%{time_total}s\\\\n\" \"https://itqan-whatsapp-ai-mvp.onrender.com/webhooks/meta/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=123\")",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)",
+      "Bash(git status *)",
+      "Bash(gh --version)",
+      "Bash(gh run *)",
+      "Bash(curl -s \"https://api.github.com/repos/Ashraf-Saleh/itqan_whatsapp_ai_mvp/actions/workflows\")",
+      "Bash(curl -s \"https://api.github.com/repos/Ashraf-Saleh/itqan_whatsapp_ai_mvp/actions/runs?per_page=5\")"
     ]
   }
 }
