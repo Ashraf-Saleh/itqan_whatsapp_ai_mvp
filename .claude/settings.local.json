@@ -74,7 +74,9 @@
       "Bash(\"/d/Users/Ashraf/.conda/envs/sales_perf_env/python.exe\" -m uvicorn app.main:app --host 127.0.0.1 --port 8002)",
       "Bash(curl -s http://127.0.0.1:8002/health -o /dev/null -w \"%{http_code}\\\\n\")",
       "Bash(tail -n 30 /tmp/uvicorn4.log 2>&1)",
-      "Bash(curl -s http://127.0.0.1:8002/health -o /dev/null -w \"health %{http_code}\\\\n\")"
+      "Bash(curl -s http://127.0.0.1:8002/health -o /dev/null -w \"health %{http_code}\\\\n\")",
+      "Bash(python3 -c \"import datetime;print\\(datetime.datetime.utcfromtimestamp\\(1785761618\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import datetime;print\\(datetime.datetime.utcfromtimestamp\\(1785761618\\)\\)\")"
     ]
   }
 }

@@ -47,10 +47,20 @@ class MetaWhatsAppClient:
         except ValueError:
             data = {"raw": response.text}
         if response.is_error:
+            error = data.get("error") if isinstance(data, dict) else None
+            if isinstance(error, dict) and error.get("code") == 190:
+                logger.error(
+                    "Meta authentication failed; verify that META_ACCESS_TOKEN is valid, unexpired, and belongs to the same app/WABA as META_PHONE_NUMBER_ID"
+                )
             logger.error(
                 "Meta API error status=%s payload=%s response=%s",
                 response.status_code, payload, data,
             )
+            if isinstance(error, dict) and error.get("code") == 190:
+                raise MetaAPIError(
+                    "Meta authentication failed (code 190). Check META_ACCESS_TOKEN, "
+                    "META_PHONE_NUMBER_ID, app/WABA ownership, token expiry, and required permissions."
+                )
             raise MetaAPIError(f"Meta API error {response.status_code}: {data}")
         return data
 
