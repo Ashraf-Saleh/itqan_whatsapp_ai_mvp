@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 from ..config import get_settings
+from ..meta_credentials import get_meta_credentials
 
 settings = get_settings()
 logger = logging.getLogger("app.messaging.meta")
@@ -27,14 +28,13 @@ class MetaWhatsAppClient:
 
     def __init__(self) -> None:
         """Build the Graph API endpoint and authorization headers."""
-        if not settings.meta_access_token or not settings.meta_phone_number_id:
-            raise MetaAPIError("Meta access token or phone number ID is not configured")
+        credentials = get_meta_credentials()
         self.url = (
             f"https://graph.facebook.com/{settings.meta_graph_api_version}/"
-            f"{settings.meta_phone_number_id}/messages"
+            f"{credentials.phone_number_id}/messages"
         )
         self.headers = {
-            "Authorization": f"Bearer {settings.meta_access_token}",
+            "Authorization": f"Bearer {credentials.access_token}",
             "Content-Type": "application/json",
         }
 
@@ -50,7 +50,7 @@ class MetaWhatsAppClient:
             error = data.get("error") if isinstance(data, dict) else None
             if isinstance(error, dict) and error.get("code") == 190:
                 logger.error(
-                    "Meta authentication failed; verify that META_ACCESS_TOKEN is valid, unexpired, and belongs to the same app/WABA as META_PHONE_NUMBER_ID"
+                    "Meta authentication failed; verify that ACCESS_TOKEN in meta_secrets.py is valid, unexpired, and belongs to the same app/WABA as PHONE_NUMBER_ID"
                 )
             logger.error(
                 "Meta API error status=%s payload=%s response=%s",
@@ -58,8 +58,8 @@ class MetaWhatsAppClient:
             )
             if isinstance(error, dict) and error.get("code") == 190:
                 raise MetaAPIError(
-                    "Meta authentication failed (code 190). Check META_ACCESS_TOKEN, "
-                    "META_PHONE_NUMBER_ID, app/WABA ownership, token expiry, and required permissions."
+                    "Meta authentication failed (code 190). Check ACCESS_TOKEN, "
+                    "PHONE_NUMBER_ID in meta_secrets.py, app/WABA ownership, token expiry, and required permissions."
                 )
             raise MetaAPIError(f"Meta API error {response.status_code}: {data}")
         return data

@@ -73,21 +73,28 @@ a Render Blueprint.
    **New > Blueprint** and point it at the repo. Render reads `render.yaml`
    and provisions both resources.
 2. Fill in the `sync: false` environment variables in the web service's
-   **Environment** tab: `ADMIN_API_KEY`, `META_ACCESS_TOKEN`,
-   `META_PHONE_NUMBER_ID`, `META_WABA_ID`, `META_WEBHOOK_VERIFY_TOKEN`,
-   `META_APP_SECRET`, `GEMINI_API_KEY`. `DATABASE_URL` is wired automatically
-   from the provisioned Postgres instance.
-3. Deploy. Once live, note the service URL
+   **Environment** tab: `ADMIN_API_KEY`, `META_APP_SECRET`, `GEMINI_API_KEY`.
+   `DATABASE_URL` is wired automatically from the provisioned Postgres
+   instance.
+3. Add `meta_secrets.py` (`ACCESS_TOKEN`, `PHONE_NUMBER_ID`, `WABA_ID`,
+   `WEBHOOK_VERIFY_TOKEN`) as a Render **Secret File** mounted at
+   `/app/meta_secrets.py`, using `meta_secrets.example.py` as the
+   template — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md). This file
+   is hot-reloaded, so rotating a token later only means editing the secret
+   file's content in the Render dashboard, not redeploying.
+4. Deploy. Once live, note the service URL
    (`https://<service-name>.onrender.com`).
-4. In the Meta App Dashboard, set the webhook callback URL to
+5. In the Meta App Dashboard, set the webhook callback URL to
    `https://<service-name>.onrender.com/webhooks/meta/whatsapp` and the verify
-   token to the same value as `META_WEBHOOK_VERIFY_TOKEN`.
-5. **Subscribe the app to the WABA** — setting the callback URL alone is not
-   enough. Run:
+   token to the same value as `WEBHOOK_VERIFY_TOKEN` in
+   `meta_secrets.py`.
+6. **Subscribe the app to the WABA** — setting the callback URL alone is not
+   enough. Run (using the `WABA_ID` / `ACCESS_TOKEN` values from
+   `meta_secrets.py`):
 
    ```bash
-   curl -X POST "https://graph.facebook.com/v26.0/<WABA_ID>/subscribed_apps" \
-     -H "Authorization: Bearer <META_ACCESS_TOKEN>"
+   curl -X POST "https://graph.facebook.com/v26.0/<waba_id>/subscribed_apps" \
+     -H "Authorization: Bearer <access_token>"
    ```
 
    Verify with a GET on the same URL — the response's `data` array must
@@ -96,7 +103,7 @@ a Render Blueprint.
    payloads directly) while real messages from customers never arrive. See
    [docs/META_WHATSAPP.md](docs/META_WHATSAPP.md) for the full webhook setup
    sequence.
-6. The Blueprint defaults to Render's **free** plan for both the web service
+7. The Blueprint defaults to Render's **free** plan for both the web service
    and the database. The free web service spins down after ~15 minutes idle
    and cold-starts (30-60s) on the next request, which can drop or delay real
    webhook deliveries; the free Postgres instance also expires after about 30
@@ -121,7 +128,9 @@ until the template preview displays real Arabic and Meta marks it Active. See
 
 - Obtain documented WhatsApp opt-in before outreach.
 - Repair and approve the Arabic marketing template.
-- Use a permanent system-user token and protect all secrets.
+- Use a permanent system-user token and protect all secrets, including
+  `meta_secrets.py` (never commit it — see
+  [docs/CONFIGURATION.md](docs/CONFIGURATION.md)).
 - Set `META_VALIDATE_SIGNATURE=true` and configure `META_APP_SECRET`.
 - Deploy behind HTTPS and replace the default admin key.
 - Move from SQLite to managed PostgreSQL (`render.yaml` provisions this).

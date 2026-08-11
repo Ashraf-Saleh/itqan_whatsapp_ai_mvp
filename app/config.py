@@ -1,7 +1,10 @@
 """Application configuration loaded from environment variables.
 
 The module exposes the :class:`Settings` model and a cached ``get_settings``
-factory used by the API, database, AI agent, and Meta client.
+factory used by the API, database, AI agent, and Meta client. The Meta
+access token, phone number ID, WABA ID, and webhook verify token are not
+part of this module — see ``app/meta_credentials.py`` for those, which are
+hot-reloaded from ``meta_secrets.py`` instead of ``.env``.
 """
 
 import logging
@@ -20,10 +23,6 @@ class Settings(BaseSettings):
     admin_api_key: str = "change-me-now"
     database_url: str = "sqlite:///./data/real_estate_agent.db"
 
-    meta_access_token: str = ""
-    meta_phone_number_id: str = ""
-    meta_waba_id: str = ""
-    meta_webhook_verify_token: str = "change-this-verify-token"
     meta_app_secret: str = ""
     meta_validate_signature: bool = True
     meta_graph_api_version: str = "v26.0"
@@ -62,10 +61,6 @@ class Settings(BaseSettings):
         if not self.gemini_api_key:
             logger.warning(
                 "GEMINI_API_KEY is empty — the AI agent will fall back to a static reply for every message."
-            )
-        if not self.meta_access_token or not self.meta_phone_number_id:
-            logger.warning(
-                "META_ACCESS_TOKEN or META_PHONE_NUMBER_ID is empty — outbound WhatsApp sends will fail."
             )
         return self
 

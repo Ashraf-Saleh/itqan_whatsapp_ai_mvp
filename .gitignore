@@ -13,6 +13,9 @@ ENV/
 .env
 .env.*
 
+# Meta WhatsApp credentials (hot-reloaded secrets, never committed)
+/meta_secrets.py
+
 # IDE/editor files
 .vscode/
 .idea/

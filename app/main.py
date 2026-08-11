@@ -25,6 +25,7 @@ from .database import Base, SessionLocal, engine, get_db
 from .logging_config import LOG_FILE, configure_logging
 from .messaging import MetaAPIError, MetaWhatsAppClient
 from .messaging.meta import normalize_meta_phone
+from .meta_credentials import MetaCredentialsError, get_meta_credentials
 from .models import Contact, LocalTemplate, Message, Unit
 from .schemas import (
     BulkOutreachRequest, LocalTemplateCreate, OutreachRequest, SandboxWelcomeRequest,
@@ -210,8 +211,12 @@ def verify_webhook(
     hub_challenge: str | None = Query(default=None, alias="hub.challenge"),
 ):
     """Complete Meta's GET webhook verification challenge."""
+    try:
+        verify_token = get_meta_credentials().webhook_verify_token
+    except MetaCredentialsError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     if hub_mode == "subscribe" and hub_verify_token and hmac.compare_digest(
-        hub_verify_token, settings.meta_webhook_verify_token
+        hub_verify_token, verify_token
     ):
         return hub_challenge or ""
     raise HTTPException(status_code=403, detail="Webhook verification failed")
@@ -244,7 +249,7 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     if events:
         try:
             client = MetaWhatsAppClient()
-        except MetaAPIError as exc:
+        except (MetaAPIError, MetaCredentialsError) as exc:
             logger.error("Cannot initialize MetaWhatsAppClient: %s", exc)
 
     processed = 0
@@ -369,7 +374,7 @@ async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends
 
         try:
             message_id = await send_template_to_contact(db, contact, recipient.name)
-        except MetaAPIError as exc:
+        except (MetaAPIError, MetaCredentialsError) as exc:
             contact.contact_status = "Outreach Failed"
             save_message(db, contact, "outbound_failed", str(exc))
             results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": str(exc)})
@@ -389,7 +394,7 @@ async def send_test_text(payload: TestTextRequest, db: Session = Depends(get_db)
     contact = get_or_create_contact(db, phone, None)
     try:
         response = await MetaWhatsAppClient().send_text(phone, payload.body)
-    except MetaAPIError as exc:
+    except (MetaAPIError, MetaCredentialsError) as exc:
         save_message(db, contact, "outbound_failed", payload.body)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     message_id = (response.get("messages") or [{}])[0].get("id")

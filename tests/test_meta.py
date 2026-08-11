@@ -13,7 +13,20 @@ from app.database import Base
 from app.main import extract_message_events, extract_status_events, record_status_events, verify_meta_signature
 from app.messaging import meta
 from app.messaging.meta import MetaAPIError, MetaWhatsAppClient, normalize_meta_phone
+from app.meta_credentials import MetaCredentials
 from app.models import Contact, Message
+
+
+def fake_meta_credentials(**overrides):
+    """Build a MetaCredentials instance for tests, with sane defaults."""
+    values = {
+        "access_token": "token",
+        "phone_number_id": "phone-id",
+        "waba_id": "waba-id",
+        "webhook_verify_token": "verify-token",
+    }
+    values.update(overrides)
+    return MetaCredentials(**values)
 
 
 def make_empty_db():
@@ -30,8 +43,7 @@ def test_normalize_egyptian_phone():
 
 def test_template_payload_contains_ordered_name_parameter(monkeypatch):
     """The outreach template includes its one required body parameter."""
-    monkeypatch.setattr(meta.settings, "meta_access_token", "token")
-    monkeypatch.setattr(meta.settings, "meta_phone_number_id", "phone-id")
+    monkeypatch.setattr(meta, "get_meta_credentials", fake_meta_credentials)
     client = MetaWhatsAppClient()
     captured = {}
 
@@ -48,8 +60,7 @@ def test_template_payload_contains_ordered_name_parameter(monkeypatch):
 
 def test_template_rejects_empty_name(monkeypatch):
     """An empty template identifier fails before an HTTP request is made."""
-    monkeypatch.setattr(meta.settings, "meta_access_token", "token")
-    monkeypatch.setattr(meta.settings, "meta_phone_number_id", "phone-id")
+    monkeypatch.setattr(meta, "get_meta_credentials", fake_meta_credentials)
     with pytest.raises(MetaAPIError):
         asyncio.run(MetaWhatsAppClient().send_template("201012345678", "", "ar"))
 
@@ -96,4 +107,21 @@ def test_verify_meta_signature_rejects_invalid(monkeypatch):
     monkeypatch.setattr(main.settings, "meta_app_secret", "secret")
     with pytest.raises(HTTPException) as error:
         verify_meta_signature(b"body", "sha256=invalid")
+    assert error.value.status_code == 403
+
+
+def test_webhook_verify_challenge_matches_token(monkeypatch):
+    """A correct hub.verify_token echoes back hub.challenge."""
+    from app import main
+    monkeypatch.setattr(main, "get_meta_credentials", fake_meta_credentials)
+    result = main.verify_webhook(hub_mode="subscribe", hub_verify_token="verify-token", hub_challenge="123")
+    assert result == "123"
+
+
+def test_webhook_verify_rejects_wrong_token(monkeypatch):
+    """An incorrect hub.verify_token is rejected with HTTP 403."""
+    from app import main
+    monkeypatch.setattr(main, "get_meta_credentials", fake_meta_credentials)
+    with pytest.raises(HTTPException) as error:
+        main.verify_webhook(hub_mode="subscribe", hub_verify_token="wrong-token", hub_challenge="123")
     assert error.value.status_code == 403
