@@ -40,3 +40,7 @@ dist/
 *.sqlite3
 *.db
 instance/
+
+# test file
+test.ipynb
+
