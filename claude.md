@@ -19,7 +19,7 @@ Run the app with `python -m uvicorn app.main:app --reload`. The local simulator 
 ## Architecture boundaries
 
 - `app/main.py` owns routes and orchestration.
-- `app/agent.py` owns deterministic conversation/compliance controls, Gemini calls, and tools.
+- `app/agent.py` owns deterministic conversation/compliance controls, Gemini and Qwen calls, and tools. Both providers share the same system prompt and tool set; the active provider is switchable at runtime (see `docs/CONFIGURATION.md`).
 - `app/messaging/meta.py` owns Meta payload construction and HTTP transport, without database or business logic.
 - `app/models.py`, `app/schemas.py`, and `app/database.py` own persistence and validation.
 - `system_message.md` owns conversational policy, but safety and compliance controls must remain enforced in code.

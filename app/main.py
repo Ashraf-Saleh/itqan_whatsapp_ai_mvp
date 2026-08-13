@@ -19,7 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
-from .agent import process_message, save_message
+from .agent import ACTIVE_MODELS, get_active_model, process_message, save_message, set_active_model
 from .config import get_settings
 from .database import Base, SessionLocal, engine, get_db
 from .logging_config import LOG_FILE, configure_logging
@@ -28,8 +28,8 @@ from .messaging.meta import normalize_meta_phone
 from .meta_credentials import MetaCredentialsError, get_meta_credentials
 from .models import Contact, LocalTemplate, Message, Unit
 from .schemas import (
-    BulkOutreachRequest, LocalTemplateCreate, OutreachRequest, SandboxWelcomeRequest,
-    SimulatorRequest, TestTextRequest, UnitCreate,
+    ActiveModelUpdate, BulkOutreachRequest, LocalTemplateCreate, OutreachRequest,
+    SandboxWelcomeRequest, SimulatorRequest, TestTextRequest, UnitCreate,
 )
 from .seed import seed_units
 
@@ -501,6 +501,22 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
     db.delete(template)
     db.commit()
     return {"deleted": True, "id": template_id}
+
+
+@app.get("/api/settings/active-model", dependencies=[Depends(require_admin)])
+def get_active_model_endpoint(db: Session = Depends(get_db)):
+    """Return which LLM provider (gemini or qwen) currently handles conversations."""
+    return {"active_model": get_active_model(db)}
+
+
+@app.post("/api/settings/active-model", dependencies=[Depends(require_admin)])
+def set_active_model_endpoint(payload: ActiveModelUpdate, db: Session = Depends(get_db)):
+    """Switch the active LLM provider for every subsequent message, no restart needed."""
+    try:
+        active_model = set_active_model(db, payload.active_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Use one of: {', '.join(ACTIVE_MODELS)}") from exc
+    return {"active_model": active_model}
 
 
 @app.post("/api/units", dependencies=[Depends(require_admin)])

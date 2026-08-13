@@ -63,6 +63,13 @@ tr.lead-row:hover{background:#f8fafc}
       <input id="key" type="password" value="change-me-now" placeholder="Admin API key (X-API-Key)">
       <button class="secondary" style="flex:0 0 auto;width:auto" onclick="refreshLeads()">Refresh data</button>
     </div>
+    <div class="row">
+      <select id="activeModel" onchange="setActiveModel(this.value)">
+        <option value="gemini">Gemini</option>
+        <option value="qwen">Qwen</option>
+      </select>
+      <span id="activeModelStatus" class="small" style="flex:0 0 auto;align-self:center"></span>
+    </div>
   </div>
 
   <div class="cols">
@@ -425,6 +432,22 @@ async function refreshLeads(){
   renderLeadTable();
 }
 
+// ---------- Active model ----------
+async function loadActiveModel(){
+  const r = await fetch('/api/settings/active-model', { headers: { 'X-API-Key': key.value } });
+  if(!r.ok) return;
+  const d = await r.json();
+  activeModel.value = d.active_model;
+}
+
+async function setActiveModel(model){
+  activeModelStatus.textContent = 'Saving...';
+  const r = await fetch('/api/settings/active-model', { method:'POST', headers: headers(), body: JSON.stringify({ active_model: model }) });
+  const d = await r.json();
+  if(!r.ok){ activeModelStatus.textContent = JSON.stringify(d); return; }
+  activeModelStatus.textContent = `Now using ${d.active_model}.`;
+}
+
 // ---------- Bulk outreach ----------
 function addRecipient(){
   const row = document.createElement('div');
@@ -468,6 +491,7 @@ async function refreshLogs(){
 
 addRecipient();
 refreshLeads();
+loadActiveModel();
 refreshTemplates();
 newSandboxChat();
 refreshLogs();

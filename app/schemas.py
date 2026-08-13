@@ -43,6 +43,10 @@ class LocalTemplateCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     body: str = Field(min_length=1, max_length=4096)
 
+class ActiveModelUpdate(BaseModel):
+    """The LLM provider to make active for all subsequent conversations."""
+    active_model: str
+
 class UnitCreate(BaseModel):
     """Validated fields required to add a property inventory unit."""
     code: str

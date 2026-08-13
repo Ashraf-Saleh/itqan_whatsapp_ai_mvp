@@ -1,27 +1,32 @@
-"""Gemini-backed real-estate conversation and CRM tool implementation.
+"""Gemini/Qwen-backed real-estate conversation and CRM tool implementation.
 
 The module builds the AI system instruction, exposes deterministic inventory
-and CRM operations to Gemini, implements opt-in/opt-out controls, and stores
-conversation messages.
+and CRM operations to Gemini or Qwen (both use the identical system prompt
+and the identical set of tools), implements opt-in/opt-out controls, and
+stores conversation messages.
 """
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
+import json
 import logging
 from pathlib import Path
 import re
+from typing import Callable
 
+from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .models import Contact, Message, Unit
+from .models import AppSetting, Contact, Message, Unit
 
 settings = get_settings()
 logger = logging.getLogger("app.agent")
 
 SYSTEM_MESSAGE_PATH = Path(__file__).resolve().parent.parent / "system_message.md"
 HISTORY_LIMIT = 40
+MAX_TOOL_ITERATIONS = 5
 
 STOP_WORDS = {"stop", "unsubscribe", "cancel", "no more", "الغاء", "إلغاء", "توقف", "متبعتليش", "لا ترسل", "مش مهتم", "غير مهتم"}
 START_WORDS = {"start", "subscribe", "اشتراك", "ابدأ"}
@@ -30,6 +35,32 @@ ALLOWED_STATUSES = {
     "New Lead", "Qualifying", "Matched", "Escalated",
     "Call Booked", "Not Interested", "Follow Up Later", "Opted Out",
 }
+
+ACTIVE_MODELS = ("gemini", "qwen")
+
+
+def get_active_model(db: Session) -> str:
+    """Return the currently selected LLM provider, creating the default row if needed."""
+    row = db.query(AppSetting).first()
+    if not row:
+        row = AppSetting(active_model="gemini")
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row.active_model
+
+
+def set_active_model(db: Session, model: str) -> str:
+    """Persist the active LLM provider selection. Raises ValueError for an unknown model."""
+    if model not in ACTIVE_MODELS:
+        raise ValueError(f"Unknown model: {model}. Use one of: {', '.join(ACTIVE_MODELS)}.")
+    row = db.query(AppSetting).first()
+    if not row:
+        row = AppSetting()
+        db.add(row)
+    row.active_model = model
+    db.commit()
+    return row.active_model
 
 
 @dataclass
@@ -154,8 +185,182 @@ def resolve_call_window(date: str, start_time: str, end_time: str | None = None)
     return start_dt, end_dt
 
 
+# Hand-written OpenAI-style tool schemas for the Qwen (OpenAI-compatible) path.
+# Gemini derives these automatically from each tool closure's signature + docstring
+# below (inside process_message), so keep this in sync with those docstrings by hand
+# whenever a tool's parameters change.
+QWEN_TOOL_SCHEMAS: dict[str, dict] = {
+    "search_units": {
+        "type": "function",
+        "function": {
+            "name": "search_units",
+            "description": (
+                "Search the available real-estate unit inventory and return the closest-matching "
+                "options, ranked best first. Call this as soon as the client mentions even one "
+                "preference — do not wait to collect every field first. Call it again whenever the "
+                "client adds or changes a preference. An empty result means there are no active "
+                "units in the portfolio at all."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "Desired city or area, in Arabic or English (e.g. \"6 أكتوبر\", \"New Cairo\")."},
+                    "unit_type": {"type": "string", "description": "Desired unit type, e.g. \"apartment\", \"duplex\", \"villa\", \"chalet\", \"office\", \"shop\", \"land\"."},
+                    "budget_min": {"type": "number", "description": "Minimum budget in EGP, if the client gave a range or a floor."},
+                    "budget_max": {"type": "number", "description": "Maximum budget in EGP, if the client gave a range or a ceiling."},
+                    "size_min": {"type": "number", "description": "Minimum desired unit size in square meters."},
+                    "size_max": {"type": "number", "description": "Maximum desired unit size in square meters."},
+                },
+                "required": [],
+            },
+        },
+    },
+    "save_client": {
+        "type": "function",
+        "function": {
+            "name": "save_client",
+            "description": (
+                "Save or update this client's information in the CRM. Call this as soon as you have "
+                "at least their name and phone number, and again any time you learn something new. "
+                "Only pass fields you actually learned in this turn — omitted fields are left unchanged."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The client's full name."},
+                    "contact_phone": {"type": "string", "description": "The phone number the client stated, if it differs from this WhatsApp number."},
+                    "job": {"type": "string", "description": "The client's job or profession, if they shared it."},
+                    "education": {"type": "string", "description": "The client's education background, if they shared it."},
+                    "budget_min": {"type": "number", "description": "Minimum budget in EGP, if given as a range or a floor."},
+                    "budget_max": {"type": "number", "description": "Maximum budget in EGP, if given as a range or a ceiling."},
+                    "location": {"type": "string", "description": "Desired city or area."},
+                    "unit_size": {"type": "number", "description": "Desired unit size in square meters."},
+                    "unit_type": {"type": "string", "description": "Desired unit type (apartment, duplex, villa, chalet, etc.)."},
+                },
+                "required": [],
+            },
+        },
+    },
+    "escalate_to_agent": {
+        "type": "function",
+        "function": {
+            "name": "escalate_to_agent",
+            "description": (
+                "Hand this conversation off to a human sales agent right away. Use this when the "
+                "client asks for a human, when the escalation triggers in the system message are "
+                "met, or when the client agrees to speak with a human after reviewing options."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "A short note on why the handoff is happening, for the human agent's context."},
+                },
+                "required": [],
+            },
+        },
+    },
+    "book_call": {
+        "type": "function",
+        "function": {
+            "name": "book_call",
+            "description": (
+                "Book a phone call with the client at an exact, already-confirmed date and time. "
+                "Only call this after resolving any relative date/time phrase into an exact date and "
+                "time and having the client confirm it back to you."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "The confirmed call date, in YYYY-MM-DD format."},
+                    "start_time": {"type": "string", "description": "The confirmed call start time, in 24-hour HH:MM format."},
+                    "end_time": {"type": "string", "description": "The confirmed call end time, in 24-hour HH:MM format, if the client gave a time range. If omitted, the call is booked for 30 minutes starting at start_time."},
+                    "notes": {"type": "string", "description": "A short note on what the client wants to discuss on the call."},
+                },
+                "required": ["date", "start_time"],
+            },
+        },
+    },
+    "update_client_status": {
+        "type": "function",
+        "function": {
+            "name": "update_client_status",
+            "description": "Update this client's CRM pipeline status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "One of \"New Lead\", \"Qualifying\", \"Matched\", \"Escalated\", \"Call Booked\", \"Not Interested\", \"Follow Up Later\".",
+                    },
+                },
+                "required": ["status"],
+            },
+        },
+    },
+}
+
+
+def _qwen_base_url(url: str) -> str:
+    """Ensure the OpenAI-compatible base URL includes the /v1 path segment.
+
+    Self-hosted servers (vLLM, SGLang, etc.) serve their OpenAI-compatible API
+    under /v1, but the openai SDK doesn't add it automatically — it only
+    appends /chat/completions to whatever base_url you give it. Without this,
+    a QWEN_URL set to the bare host (e.g. an ngrok tunnel root) 404s.
+    """
+    stripped = url.rstrip("/")
+    return stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+
+
+def call_qwen(system_instruction: str, history: list[Message], tool_functions: dict[str, Callable]) -> str:
+    """Get a reply from the self-hosted Qwen model, running its tool-call loop locally.
+
+    Unlike Gemini's SDK, a generic OpenAI-compatible endpoint doesn't run the
+    "call a tool, feed back the result, re-prompt" loop for us, so this
+    function does it manually, up to MAX_TOOL_ITERATIONS rounds.
+    """
+    messages: list[dict] = [{"role": "system", "content": system_instruction}]
+    messages.extend(
+        {"role": "user" if m.direction == "inbound" else "assistant", "content": m.body}
+        for m in history
+        if m.body
+    )
+
+    client = OpenAI(base_url=_qwen_base_url(settings.qwen_url), api_key=settings.qwen_api_key or "not-needed")
+
+    for _ in range(MAX_TOOL_ITERATIONS):
+        response = client.chat.completions.create(
+            model=settings.qwen_model,
+            messages=messages,
+            tools=list(QWEN_TOOL_SCHEMAS.values()),
+            tool_choice="auto",
+        )
+        message = response.choices[0].message
+
+        if not message.tool_calls:
+            return (message.content or "").strip()
+
+        messages.append(message.model_dump(exclude_none=True))
+        for tool_call in message.tool_calls:
+            name = tool_call.function.name
+            try:
+                kwargs = json.loads(tool_call.function.arguments or "{}")
+                result = tool_functions[name](**kwargs)
+            except Exception as exc:
+                logger.exception("QWEN TOOL ERROR name=%s", name)
+                result = {"error": str(exc)}
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": json.dumps(result, ensure_ascii=False, default=str),
+            })
+
+    logger.warning("Qwen tool loop exceeded MAX_TOOL_ITERATIONS=%d without a final reply", MAX_TOOL_ITERATIONS)
+    return ""
+
+
 def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
-    """Process one inbound message using compliance rules and the Gemini agent."""
+    """Process one inbound message using compliance rules and the active LLM provider."""
     text = normalize(body)
 
     if contains_any(text, STOP_WORDS):
@@ -171,7 +376,16 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
         contact.contact_status = "New Lead"
         db.commit()
 
-    if not settings.gemini_api_key:
+    active_model = get_active_model(db)
+    if active_model == "qwen":
+        if not settings.qwen_url or not settings.qwen_model:
+            logger.error(
+                "Qwen selected but not configured (QWEN_URL set=%s, QWEN_MODEL set=%s) — falling back to static reply",
+                bool(settings.qwen_url), bool(settings.qwen_model),
+            )
+            return AgentResult("عذرًا، المساعد غير متاح حاليًا. سيتواصل معك أحد الزملاء في أقرب وقت.")
+    elif not settings.gemini_api_key:
+        logger.error("Gemini selected but GEMINI_API_KEY is empty — falling back to static reply")
         return AgentResult("عذرًا، المساعد غير متاح حاليًا. سيتواصل معك أحد الزملاء في أقرب وقت.")
 
     def search_units(
@@ -326,29 +540,44 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
     history.reverse()
     logger.info("contact_id=%s history_length=%d", contact.id, len(history))
 
-    from google import genai
-    from google.genai import types
+    tool_functions: dict[str, Callable] = {
+        "search_units": search_units,
+        "save_client": save_client,
+        "escalate_to_agent": escalate_to_agent,
+        "book_call": book_call,
+        "update_client_status": update_client_status,
+    }
 
-    contents = [
-        types.Content(role="user" if m.direction == "inbound" else "model", parts=[types.Part(text=m.body)])
-        for m in history
-        if m.body
-    ]
+    if active_model == "qwen":
+        try:
+            reply = call_qwen(build_system_instruction(), history, tool_functions)
+        except Exception:
+            logger.exception("QWEN ERROR for contact_id=%s", contact.id)
+            reply = ""
+    else:
+        from google import genai
+        from google.genai import types
 
-    try:
-        client = genai.Client(api_key=settings.gemini_api_key)
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=build_system_instruction(),
-                tools=[search_units, save_client, escalate_to_agent, book_call, update_client_status],
-            ),
-        )
-        reply = (response.text or "").strip()
-    except Exception:
-        logger.exception("GEMINI ERROR for contact_id=%s", contact.id)
-        reply = ""
+        contents = [
+            types.Content(role="user" if m.direction == "inbound" else "model", parts=[types.Part(text=m.body)])
+            for m in history
+            if m.body
+        ]
+
+        try:
+            client = genai.Client(api_key=settings.gemini_api_key)
+            response = client.models.generate_content(
+                model=settings.gemini_model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=build_system_instruction(),
+                    tools=list(tool_functions.values()),
+                ),
+            )
+            reply = (response.text or "").strip()
+        except Exception:
+            logger.exception("GEMINI ERROR for contact_id=%s", contact.id)
+            reply = ""
 
     if not reply:
         reply = "حصل عندنا تأخير بسيط، هنرد عليك في أقرب وقت. شكرًا لصبرك."

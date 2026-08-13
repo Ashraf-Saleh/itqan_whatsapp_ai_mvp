@@ -16,6 +16,9 @@ Settings are loaded from `.env` through Pydantic. Never commit `.env`.
 | `META_TEMPLATE_PARAMETER_COUNT` | Body variable count | Current contract: `1`. |
 | `GEMINI_API_KEY` | Authenticate Gemini | Store in a secret manager. |
 | `GEMINI_MODEL` | Gemini model identifier | Validate behavior on changes. |
+| `QWEN_URL` | Base URL of the OpenAI-compatible Qwen server | Either the bare host or a URL ending in `/v1` both work — `/v1` is appended automatically if missing. |
+| `QWEN_MODEL` | Model name to send in each request | Must match what the server expects. |
+| `QWEN_API_KEY` | Bearer token for the Qwen server | Leave blank if the server doesn't enforce auth. |
 | `HUMAN_SALES_NAME` | Handoff display/assignment | Use a real queue/team label. |
 | `HUMAN_SALES_PHONE` | Sales contact configuration | Not exposed unless implemented. |
 | `COMPANY_NAME` | Replaces `[Agency Name]` in prompt | Current: ITQAN Real Estate. |
@@ -56,3 +59,28 @@ Because this file is executed as Python (not parsed as inert data like
 JSON), only edit it yourself or via trusted deploy tooling — anyone who can
 write to it can run arbitrary code in the app process, the same trust level
 already required for `.env`.
+
+## Switching the active LLM model (Gemini / Qwen)
+
+Unlike the settings above, *which* model handles conversations is not read
+from `.env` — it's a single value persisted in the database (`AppSetting`
+table, `app/models.py`) and switchable at runtime with no restart:
+
+- `GET /api/settings/active-model` and `POST /api/settings/active-model`
+  (both admin-protected, `X-API-Key`) read and set it; the dashboard's model
+  selector at the top of the page calls these.
+- Every subsequent inbound message (sandbox and real) uses whichever
+  provider is currently selected — `process_message` re-reads it on every
+  call, so a switch takes effect on the very next message.
+- Both providers receive the **identical system prompt** (`system_message.md`
+  via `build_system_instruction()`) and the **identical set of tools**
+  (`search_units`, `save_client`, `escalate_to_agent`, `book_call`,
+  `update_client_status`) — only how tool-calling is wired up differs:
+  - Gemini's SDK derives tool schemas automatically from each tool's Python
+    signature and docstring, and runs the "call tool → feed back result →
+    re-prompt" loop internally.
+  - Qwen goes through a generic OpenAI-compatible `/v1/chat/completions`
+    endpoint, which doesn't do either of those for us. `app/agent.py`
+    hand-writes the tool schemas as `QWEN_TOOL_SCHEMAS` and runs that loop
+    manually in `call_qwen()`. **`QWEN_TOOL_SCHEMAS` is not derived from the
+    tool docstrings — if you change a tool's parameters, update both.**

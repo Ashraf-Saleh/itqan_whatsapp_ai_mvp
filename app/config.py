@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
+    qwen_url: str = ""
+    qwen_model: str = ""
+    qwen_api_key: str = ""
+
     human_sales_name: str = "Sales Team"
     human_sales_phone: str = "+201000000000"
     company_name: str = "ITQAN Real Estate"

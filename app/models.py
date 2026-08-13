@@ -59,6 +59,14 @@ class LocalTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class AppSetting(Base):
+    """Single-row table holding small pieces of mutable runtime app state,
+    such as which LLM provider is currently active."""
+    __tablename__ = "app_settings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    active_model: Mapped[str] = mapped_column(String(20), default="gemini")
+
+
 class Unit(Base):
     """A searchable real-estate unit imported from the inventory JSON file."""
     __tablename__ = "units"

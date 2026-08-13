@@ -88,7 +88,11 @@
       "Bash(curl -s \"https://api.github.com/repos/Ashraf-Saleh/itqan_whatsapp_ai_mvp/actions/runs?per_page=5\")",
       "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
       "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -c 'import fastapi, sqlalchemy; print\\('\\\\''deps ok'\\\\''\\)')",
-      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -c 'from app.main import app; print\\('\\\\''OK'\\\\'', [r.path for r in app.routes if '\\\\''logs'\\\\'' in r.path]\\)')"
+      "Bash(/c/Users/Office/.conda/envs/sales_perf_env/python.exe -c 'from app.main import app; print\\('\\\\''OK'\\\\'', [r.path for r in app.routes if '\\\\''logs'\\\\'' in r.path]\\)')",
+      "Bash(.venv/Scripts/python.exe -m pip install openai)",
+      "Bash(.venv/Scripts/python.exe -m pip show openai)",
+      "Bash(.venv/Scripts/python.exe -c \"from openai import OpenAI; import inspect; print\\(inspect.signature\\(OpenAI.__init__\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest -q)"
     ]
   }
 }
