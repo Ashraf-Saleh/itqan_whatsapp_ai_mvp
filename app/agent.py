@@ -86,8 +86,8 @@ def _load_system_message_template() -> str:
     return SYSTEM_MESSAGE_PATH.read_text(encoding="utf-8")
 
 
-def build_system_instruction() -> str:
-    """Build the system instruction with company identity and current time."""
+def build_system_instruction(whatsapp_number: str) -> str:
+    """Build the system instruction with company identity, current time, and this contact's WhatsApp number."""
     template = _load_system_message_template().replace("[Agency Name]", settings.company_name)
     now = datetime.now()
     return (
@@ -95,7 +95,10 @@ def build_system_instruction() -> str:
         "## Current context\n"
         f"- Current date and time: {now.strftime('%A %Y-%m-%d %H:%M')}\n"
         "- Resolve any relative date or time the client mentions (e.g. \"بكرة\", \"الجمعة الجاي\") "
-        "against this current date and time before calling book_call."
+        "against this current date and time before calling book_call.\n"
+        f"- The client's WhatsApp number for this conversation is: {whatsapp_number}. "
+        "If they confirm this number is fine for calls, pass this exact value as contact_phone "
+        "when calling save_client — don't leave it blank."
     )
 
 
@@ -221,14 +224,15 @@ QWEN_TOOL_SCHEMAS: dict[str, dict] = {
             "name": "save_client",
             "description": (
                 "Save or update this client's information in the CRM. Call this as soon as you have "
-                "at least their name and phone number, and again any time you learn something new. "
-                "Only pass fields you actually learned in this turn — omitted fields are left unchanged."
+                "at least their name and a confirmed callback-number preference, and again any time "
+                "you learn something new. Only pass fields you actually learned in this turn — "
+                "omitted fields are left unchanged."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "The client's full name."},
-                    "contact_phone": {"type": "string", "description": "The phone number the client stated, if it differs from this WhatsApp number."},
+                    "contact_phone": {"type": "string", "description": "The confirmed callback number, once the client has answered whether calls should go to this WhatsApp number or a different one. Always pass a value once confirmed — the WhatsApp number itself if they said that's fine, or the different number if they gave one."},
                     "job": {"type": "string", "description": "The client's job or profession, if they shared it."},
                     "education": {"type": "string", "description": "The client's education background, if they shared it."},
                     "budget_min": {"type": "number", "description": "Minimum budget in EGP, if given as a range or a floor."},
@@ -432,14 +436,17 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
     ) -> dict:
         """Save or update this client's information in the CRM.
 
-        Call this as soon as you have at least their name and phone number, and again any time
-        you learn something new. Only pass fields you actually learned in this turn or already
-        know — omit fields you don't have yet, since omitted fields are left unchanged rather
-        than cleared.
+        Call this as soon as you have at least their name and a confirmed callback-number
+        preference, and again any time you learn something new. Only pass fields you actually
+        learned in this turn or already know — omit fields you don't have yet, since omitted
+        fields are left unchanged rather than cleared.
 
         Args:
             name: the client's full name.
-            contact_phone: the phone number the client stated, if it differs from this WhatsApp number.
+            contact_phone: the confirmed callback number, once the client has answered whether
+                calls should go to this WhatsApp number or a different one. Always pass a value
+                once confirmed — the WhatsApp number itself if they said that's fine, or the
+                different number if they gave one.
             job: the client's job or profession, if they shared it.
             education: the client's education background, if they shared it.
             budget_min: minimum budget in EGP, if given as a range or a floor.
@@ -550,7 +557,7 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
 
     if active_model == "qwen":
         try:
-            reply = call_qwen(build_system_instruction(), history, tool_functions)
+            reply = call_qwen(build_system_instruction(contact.phone), history, tool_functions)
         except Exception:
             logger.exception("QWEN ERROR for contact_id=%s", contact.id)
             reply = ""
@@ -570,7 +577,7 @@ def process_message(db: Session, contact: Contact, body: str) -> AgentResult:
                 model=settings.gemini_model,
                 contents=contents,
                 config=types.GenerateContentConfig(
-                    system_instruction=build_system_instruction(),
+                    system_instruction=build_system_instruction(contact.phone),
                     tools=list(tool_functions.values()),
                 ),
             )

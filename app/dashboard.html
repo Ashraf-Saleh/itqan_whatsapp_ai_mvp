@@ -98,6 +98,9 @@ tr.lead-row:hover{background:#f8fafc}
       <select id="realLeadSelect" onchange="selectRealLead(this.value)">
         <option value="">Select a real lead…</option>
       </select>
+      <div class="row">
+        <button class="danger" style="flex:0 0 auto;width:auto" onclick="deleteRealLead()">🗑️ Delete all data for this lead</button>
+      </div>
       <div class="chat-header">
         <span class="name" id="realLeadHeader">No lead selected</span>
         <span class="small" id="realLeadStatus"></span>
@@ -297,8 +300,23 @@ async function refreshRealChat(){
   if(!realContactId) return;
   const detail = await fetchLeadDetail(realContactId);
   realLeadHeader.textContent = detail.lead.name || detail.lead.phone;
-  realLeadStatus.textContent = `${detail.lead.phone} · ${detail.lead.contact_status}${detail.lead.opted_out ? ' · OPTED OUT' : ''}`;
+  const callbackNote = detail.lead.contact_phone && detail.lead.contact_phone !== detail.lead.phone ? ` · calls: ${detail.lead.contact_phone}` : '';
+  realLeadStatus.textContent = `${detail.lead.phone}${callbackNote} · ${detail.lead.contact_status}${detail.lead.opted_out ? ' · OPTED OUT' : ''}`;
   renderMessages(realChat, detail.messages);
+}
+
+async function deleteRealLead(){
+  if(!realContactId){ alert('Select a real lead first.'); return; }
+  const lead = allLeads.find(l => String(l.id) === String(realContactId));
+  if(!confirm(`Delete ALL data for ${lead ? (lead.name || lead.phone) : 'this lead'}? This cannot be undone.`)) return;
+  const r = await fetch(`/api/leads/${realContactId}`, { method:'DELETE', headers: headers() });
+  if(!r.ok){ alert('Delete failed: ' + JSON.stringify(await r.json())); return; }
+  stopRealPolling();
+  realContactId = null;
+  realChat.innerHTML = '';
+  realLeadHeader.textContent = 'No lead selected';
+  realLeadStatus.textContent = '';
+  await refreshLeads();
 }
 
 function startRealPolling(){
@@ -405,7 +423,7 @@ function renderLeadTable(){
     <tr class="lead-row" onclick="openLeadFromTable(${x.id}, '${x.source}')">
       <td><span class="badge ${x.source === 'real' ? 'badge-real' : 'badge-sandbox'}">${x.source}</span></td>
       <td>${escapeHtml(x.name || '')}</td>
-      <td>${x.phone}</td>
+      <td>${x.phone}${x.contact_phone && x.contact_phone !== x.phone ? `<br><span class="small">calls: ${escapeHtml(x.contact_phone)}</span>` : ''}</td>
       <td>${x.status}</td>
       <td>${[x.job, x.education, x.location, x.unit_type, x.unit_size ? `${x.unit_size}m2` : null,
              (x.budget_min || x.budget_max) ? `${x.budget_min || '?'}-${x.budget_max || '?'} EGP` : null]

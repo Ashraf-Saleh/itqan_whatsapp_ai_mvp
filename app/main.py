@@ -443,7 +443,7 @@ def list_leads(db: Session = Depends(get_db)):
     """List leads in descending order of their most recent update."""
     contacts = db.query(Contact).order_by(Contact.updated_at.desc()).all()
     return [{
-        "id": c.id, "name": c.name, "phone": c.phone, "status": c.contact_status,
+        "id": c.id, "name": c.name, "phone": c.phone, "contact_phone": c.contact_phone, "status": c.contact_status,
         "source": lead_source(c),
         "job": c.job, "education": c.education, "location": c.location,
         "budget_min": c.budget_min, "budget_max": c.budget_max,
@@ -471,6 +471,17 @@ def lead_detail(contact_id: int, db: Session = Depends(get_db)):
         "lead": lead,
         "messages": [{"direction": m.direction, "body": m.body, "message_id": m.message_sid, "created_at": m.created_at} for m in messages],
     }
+
+
+@app.delete("/api/leads/{contact_id}", dependencies=[Depends(require_admin)])
+def delete_lead(contact_id: int, db: Session = Depends(get_db)):
+    """Permanently delete a lead and all of its messages (testing utility)."""
+    contact = db.get(Contact, contact_id)
+    if not contact:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    db.delete(contact)
+    db.commit()
+    return {"deleted": True, "id": contact_id}
 
 
 @app.get("/api/templates", dependencies=[Depends(require_admin)])

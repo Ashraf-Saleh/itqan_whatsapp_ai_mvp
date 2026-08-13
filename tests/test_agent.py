@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.database import Base
-from app.models import Contact
+from app.models import Contact, Message
 from app.schemas import ActiveModelUpdate
 from app.seed import seed_units
 from app.agent import (
@@ -280,3 +280,36 @@ def test_set_active_model_endpoint_rejects_invalid_value():
     with pytest.raises(HTTPException) as error:
         main.set_active_model_endpoint(ActiveModelUpdate(active_model="bad-model"), db=db)
     assert error.value.status_code == 422
+
+
+def test_delete_lead_removes_contact_and_cascades_to_messages():
+    """Deleting a lead also deletes its message history via the ORM cascade."""
+    from app import main
+    db = make_db()
+    c = Contact(phone="whatsapp:+201000000007", name="Test Lead")
+    db.add(c); db.commit(); db.refresh(c)
+    db.add(Message(contact_id=c.id, direction="inbound", body="hi"))
+    db.commit()
+
+    result = main.delete_lead(contact_id=c.id, db=db)
+
+    assert result == {"deleted": True, "id": c.id}
+    assert db.get(Contact, c.id) is None
+    assert db.query(Message).filter(Message.contact_id == c.id).count() == 0
+
+
+def test_delete_lead_missing_contact_raises_404():
+    """Deleting a nonexistent lead id fails clearly instead of silently no-op-ing."""
+    from app import main
+    db = make_db()
+    with pytest.raises(HTTPException) as error:
+        main.delete_lead(contact_id=999999, db=db)
+    assert error.value.status_code == 404
+
+
+def test_build_system_instruction_includes_whatsapp_number():
+    """The model is given the contact's WhatsApp number so it can echo it back as contact_phone."""
+    from app import agent
+    instruction = agent.build_system_instruction("201100000082")
+    assert "201100000082" in instruction
+    assert "contact_phone" in instruction
