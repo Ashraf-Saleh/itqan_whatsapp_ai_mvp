@@ -93,7 +93,8 @@
       "Bash(.venv/Scripts/python.exe -m pip show openai)",
       "Bash(.venv/Scripts/python.exe -c \"from openai import OpenAI; import inspect; print\\(inspect.signature\\(OpenAI.__init__\\)\\)\")",
       "Bash(.venv/Scripts/python.exe -m pytest -q)",
-      "Bash(.venv/Scripts/python.exe -c \"import app.agent; import app.main\")"
+      "Bash(.venv/Scripts/python.exe -c \"import app.agent; import app.main\")",
+      "Bash(.venv/Scripts/python.exe -c \"import app.main\")"
     ]
   }
 }

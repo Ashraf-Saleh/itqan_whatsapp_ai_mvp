@@ -7,6 +7,7 @@ dashboard into one HTTP application. Administrative endpoints require the
 
 from __future__ import annotations
 
+import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 import hashlib
@@ -15,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -222,9 +223,64 @@ def verify_webhook(
     raise HTTPException(status_code=403, detail="Webhook verification failed")
 
 
+def process_and_reply(contact_id: int, body: str, reply_to_message_id: str) -> None:
+    """Run the agent and send its reply for one inbound message.
+
+    Runs as a background task (registered via ``BackgroundTasks.add_task``, which
+    Starlette executes in a thread pool for plain ``def`` callables — not on the
+    main event loop). This is what actually lets the server keep handling other
+    requests while a slow model call (e.g. Qwen's local tool-calling loop, which
+    can take 30-60+ seconds per round trip) is in flight. Opens its own DB session
+    since the request-scoped one from the webhook handler is already closed by the
+    time a background task runs.
+    """
+    db = SessionLocal()
+    try:
+        contact = db.get(Contact, contact_id)
+        if not contact:
+            logger.error("process_and_reply: contact_id=%s no longer exists", contact_id)
+            return
+
+        try:
+            result = process_message(db, contact, body)
+        except Exception:
+            logger.exception("process_message failed for contact_id=%s", contact.id)
+            save_message(db, contact, "outbound_failed", "ERROR: process_message raised an exception, see server logs")
+            return
+
+        try:
+            client = MetaWhatsAppClient()
+        except (MetaAPIError, MetaCredentialsError) as exc:
+            logger.error("Cannot initialize MetaWhatsAppClient: %s", exc)
+            save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: Meta client not configured")
+            return
+
+        phone = contact.phone
+        try:
+            response = asyncio.run(client.send_text(phone, result.reply, reply_to_message_id=reply_to_message_id))
+            outbound_id = (response.get("messages") or [{}])[0].get("id")
+            save_message(db, contact, "outbound", result.reply, outbound_id)
+            logger.info("reply sent to %s message_id=%s", phone, outbound_id)
+        except MetaAPIError as exc:
+            logger.error("send_text failed for phone=%s: %s", phone, exc)
+            save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: {exc}")
+        except Exception:
+            logger.exception("Unexpected error sending reply to phone=%s", phone)
+            save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: unexpected exception, see server logs")
+    finally:
+        db.close()
+
+
 @app.post("/webhooks/meta/whatsapp")
-async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
-    """Receive WhatsApp messages/statuses, run the agent, and send replies."""
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Acknowledge Meta immediately; the agent call and reply send happen in the background.
+
+    Meta expects a fast webhook response and retries slow/unresponsive deliveries —
+    holding the response open until a Qwen reply is ready (which can take minutes)
+    caused Meta to redeliver the same message. Only the fast bookkeeping (dedup
+    check, contact/inbound-message persistence) stays synchronous here, so a
+    near-simultaneous retry still correctly finds the already-saved inbound message.
+    """
     raw_body = await request.body()
     verify_meta_signature(raw_body, request.headers.get("X-Hub-Signature-256"))
     try:
@@ -239,21 +295,13 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     events = extract_message_events(payload)
     record_status_events(db, statuses)
     logger.info("extracted %d message event(s), %d status update(s)", len(events), len(statuses))
+
+    queued = 0
     for event in events:
         logger.info(
             "event: phone=%s message_id=%s body=%r",
             event["phone"], event["message_id"], event["body"],
         )
-
-    client = None
-    if events:
-        try:
-            client = MetaWhatsAppClient()
-        except (MetaAPIError, MetaCredentialsError) as exc:
-            logger.error("Cannot initialize MetaWhatsAppClient: %s", exc)
-
-    processed = 0
-    for event in events:
         phone = normalize_meta_phone(event["phone"])
         if not phone or not event["message_id"]:
             logger.warning("SKIPPED event with missing phone/message_id: %s", event)
@@ -281,35 +329,10 @@ async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
             db.commit()
 
         save_message(db, contact, "inbound", event["body"], event["message_id"])
+        background_tasks.add_task(process_and_reply, contact.id, event["body"], event["message_id"])
+        queued += 1
 
-        try:
-            result = process_message(db, contact, event["body"])
-        except Exception:
-            logger.exception("process_message failed for contact_id=%s", contact.id)
-            save_message(db, contact, "outbound_failed", "ERROR: process_message raised an exception, see server logs")
-            processed += 1
-            continue
-
-        if client is None:
-            logger.warning("no Meta client available, cannot send reply to %s", phone)
-            save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: Meta client not configured")
-            processed += 1
-            continue
-
-        try:
-            response = await client.send_text(phone, result.reply, reply_to_message_id=event["message_id"])
-            outbound_id = (response.get("messages") or [{}])[0].get("id")
-            save_message(db, contact, "outbound", result.reply, outbound_id)
-            logger.info("reply sent to %s message_id=%s", phone, outbound_id)
-        except MetaAPIError as exc:
-            logger.error("send_text failed for phone=%s: %s", phone, exc)
-            save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: {exc}")
-        except Exception:
-            logger.exception("Unexpected error sending reply to phone=%s", phone)
-            save_message(db, contact, "outbound_failed", f"{result.reply}\nERROR: unexpected exception, see server logs")
-        processed += 1
-
-    return {"status": "received", "processed_messages": processed, "status_updates": len(statuses)}
+    return {"status": "accepted", "queued": queued, "status_updates": len(statuses)}
 
 
 LOG_TAIL_MAX_BYTES = 200_000

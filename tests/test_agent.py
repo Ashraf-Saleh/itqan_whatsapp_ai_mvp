@@ -11,8 +11,8 @@ from app.models import Contact, Message
 from app.schemas import ActiveModelUpdate
 from app.seed import seed_units
 from app.agent import (
-    QWEN_TOOL_SCHEMAS, _qwen_base_url, call_qwen, get_active_model, process_message, rank_units,
-    resolve_call_window, set_active_model, update_client_fields,
+    AgentResult, QWEN_TOOL_SCHEMAS, _qwen_base_url, call_qwen, get_active_model, process_message,
+    rank_units, resolve_call_window, set_active_model, update_client_fields,
 )
 
 
@@ -313,3 +313,62 @@ def test_build_system_instruction_includes_whatsapp_number():
     instruction = agent.build_system_instruction("201100000082")
     assert "201100000082" in instruction
     assert "contact_phone" in instruction
+
+
+def test_process_and_reply_sends_reply_and_saves_messages(monkeypatch):
+    """process_and_reply opens its own DB session (independent of any request-scoped
+    one) and completes the agent-call + outbound-send + message-persistence flow."""
+    from app import main
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    TestSessionLocal = sessionmaker(bind=engine)
+
+    db = TestSessionLocal()
+    contact = Contact(phone="whatsapp:+201000000008", name="Test")
+    db.add(contact); db.commit(); db.refresh(contact)
+    contact_id = contact.id
+    db.close()
+
+    monkeypatch.setattr(main, "SessionLocal", TestSessionLocal)
+    monkeypatch.setattr(main, "process_message", lambda db, contact, body: AgentResult("test reply"))
+
+    class FakeClient:
+        async def send_text(self, phone, body, reply_to_message_id=None):
+            return {"messages": [{"id": "wamid.fake"}]}
+
+    monkeypatch.setattr(main, "MetaWhatsAppClient", lambda: FakeClient())
+
+    main.process_and_reply(contact_id, "hello", "wamid.in")
+
+    check_db = TestSessionLocal()
+    messages = check_db.query(Message).filter(Message.contact_id == contact_id).all()
+    assert any(m.direction == "outbound" and m.body == "test reply" and m.message_sid == "wamid.fake" for m in messages)
+
+
+def test_process_and_reply_saves_failure_when_process_message_raises(monkeypatch):
+    """A crash in process_message is caught and recorded instead of propagating from a background task."""
+    from app import main
+
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    TestSessionLocal = sessionmaker(bind=engine)
+
+    db = TestSessionLocal()
+    contact = Contact(phone="whatsapp:+201000000009", name="Test")
+    db.add(contact); db.commit(); db.refresh(contact)
+    contact_id = contact.id
+    db.close()
+
+    monkeypatch.setattr(main, "SessionLocal", TestSessionLocal)
+
+    def boom(db, contact, body):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "process_message", boom)
+
+    main.process_and_reply(contact_id, "hello", "wamid.in")
+
+    check_db = TestSessionLocal()
+    messages = check_db.query(Message).filter(Message.contact_id == contact_id).all()
+    assert any(m.direction == "outbound_failed" for m in messages)
