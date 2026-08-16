@@ -15,8 +15,9 @@ class OutreachRecipient(BaseModel):
     name: str = Field(min_length=1, max_length=160)
 
 class BulkOutreachRequest(BaseModel):
-    """A bounded collection of recipients for one bulk send operation."""
+    """A bounded collection of recipients for one bulk send of a saved free-text template."""
 
+    template_id: int
     recipients: list[OutreachRecipient] = Field(min_length=1, max_length=100)
 
 class TestTextRequest(BaseModel):

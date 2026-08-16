@@ -372,3 +372,43 @@ def test_process_and_reply_saves_failure_when_process_message_raises(monkeypatch
     check_db = TestSessionLocal()
     messages = check_db.query(Message).filter(Message.contact_id == contact_id).all()
     assert any(m.direction == "outbound_failed" for m in messages)
+
+
+def test_send_bulk_outreach_sends_selected_template_with_name_substitution(monkeypatch):
+    """Bulk outreach sends the chosen saved template's body, with {{name}} filled in per recipient."""
+    import asyncio
+    from app import main
+    from app.models import LocalTemplate
+    from app.schemas import BulkOutreachRequest, OutreachRecipient
+
+    db = make_db()
+    template = LocalTemplate(name="Follow-up", body="أهلاً {{name}}، لسه مهتم؟")
+    db.add(template); db.commit(); db.refresh(template)
+
+    captured = []
+
+    class FakeClient:
+        async def send_text(self, phone, body, reply_to_message_id=None):
+            captured.append((phone, body))
+            return {"messages": [{"id": "wamid.fake"}]}
+
+    monkeypatch.setattr(main, "MetaWhatsAppClient", lambda: FakeClient())
+
+    payload = BulkOutreachRequest(template_id=template.id, recipients=[OutreachRecipient(phone="01100000082", name="أحمد")])
+    result = asyncio.run(main.send_bulk_outreach(payload, db=db))
+
+    assert result["results"][0]["status"] == "sent"
+    assert captured[0][1] == "أهلاً أحمد، لسه مهتم؟"
+
+
+def test_send_bulk_outreach_missing_template_raises_404():
+    """A bad template_id fails clearly instead of silently sending nothing."""
+    import asyncio
+    from app import main
+    from app.schemas import BulkOutreachRequest, OutreachRecipient
+
+    db = make_db()
+    payload = BulkOutreachRequest(template_id=999999, recipients=[OutreachRecipient(phone="01100000082", name="أحمد")])
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(main.send_bulk_outreach(payload, db=db))
+    assert error.value.status_code == 404

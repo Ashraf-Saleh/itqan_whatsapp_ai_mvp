@@ -152,6 +152,13 @@ tr.lead-row:hover{background:#f8fafc}
 
   <div class="card">
     <h2>Bulk Template Outreach</h2>
+    <p class="small">Sends the chosen saved Message Template as free-form text to everyone below,
+      even numbers that have never messaged before. WhatsApp only delivers free text to a
+      recipient with an open 24h service window (i.e. who has messaged recently) — anyone
+      outside that window will show up as a failed send below, not silently skipped.</p>
+    <select id="bulkTemplatePicker">
+      <option value="">Choose a saved template to send…</option>
+    </select>
     <div id="recipients"></div>
     <button class="secondary" onclick="addRecipient()">+ Add recipient</button>
     <button onclick="sendBulk()">Send template to all</button>
@@ -361,6 +368,10 @@ freeTextInput_keydown = (e) => {
 function populateTemplatePicker(){
   templatePicker.innerHTML = '<option value="">Insert saved template… ({{name}} auto-filled from this lead)</option>' +
     allTemplates.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+  const bulkCurrent = bulkTemplatePicker.value;
+  bulkTemplatePicker.innerHTML = '<option value="">Choose a saved template to send…</option>' +
+    allTemplates.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+  if(bulkCurrent && allTemplates.some(t => String(t.id) === bulkCurrent)) bulkTemplatePicker.value = bulkCurrent;
 }
 
 function renderTemplateList(){
@@ -475,13 +486,15 @@ function addRecipient(){
 }
 
 async function sendBulk(){
+  const templateId = bulkTemplatePicker.value;
+  if(!templateId){ bulkStatus.textContent = 'Choose a template to send first.'; return; }
   const list = [...recipients.children].map(row => ({
     phone: row.querySelector('.r-phone').value.trim(),
     name: row.querySelector('.r-name').value.trim(),
   })).filter(r => r.phone && r.name);
   if(!list.length){ bulkStatus.textContent = 'Add at least one phone + name.'; return; }
   bulkStatus.textContent = 'Sending...';
-  const r = await fetch('/api/outreach/bulk', { method:'POST', headers: headers(), body: JSON.stringify({ recipients: list }) });
+  const r = await fetch('/api/outreach/bulk', { method:'POST', headers: headers(), body: JSON.stringify({ template_id: Number(templateId), recipients: list }) });
   const d = await r.json();
   if(!r.ok){ bulkStatus.textContent = JSON.stringify(d); return; }
   bulkStatus.innerHTML = d.results.map(x => `${x.status==='sent'?'✓':'✗'} ${x.phone} (${x.name})${x.detail ? ': '+x.detail : ''}`).join('<br>');

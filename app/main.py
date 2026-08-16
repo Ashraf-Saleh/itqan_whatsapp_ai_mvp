@@ -382,7 +382,17 @@ async def send_outreach(payload: OutreachRequest, db: Session = Depends(get_db))
 
 @app.post("/api/outreach/bulk", dependencies=[Depends(require_admin)])
 async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends(get_db)):
-    """Send the configured template to up to 100 named recipients."""
+    """Send a saved free-text template to up to 100 named recipients.
+
+    Free-form text only reaches recipients with an open 24h service window
+    (i.e. who have messaged the business recently) — Meta rejects it
+    otherwise, and that shows up as a "failed" entry per recipient below
+    rather than being silently dropped.
+    """
+    template = db.get(LocalTemplate, payload.template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
     results = []
     for recipient in payload.recipients:
         phone = normalize_meta_phone(recipient.phone)
@@ -395,14 +405,18 @@ async def send_bulk_outreach(payload: BulkOutreachRequest, db: Session = Depends
             results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": "Contact has opted out"})
             continue
 
+        body = template.body.replace("{{name}}", recipient.name)
         try:
-            message_id = await send_template_to_contact(db, contact, recipient.name)
+            response = await MetaWhatsAppClient().send_text(phone, body)
         except (MetaAPIError, MetaCredentialsError) as exc:
-            contact.contact_status = "Outreach Failed"
-            save_message(db, contact, "outbound_failed", str(exc))
+            save_message(db, contact, "outbound_failed", body)
             results.append({"phone": phone, "name": recipient.name, "status": "failed", "detail": str(exc)})
             continue
 
+        message_id = (response.get("messages") or [{}])[0].get("id")
+        save_message(db, contact, "outbound", body, message_id)
+        contact.contact_status = "Outreach Sent"
+        db.commit()
         results.append({"phone": phone, "name": recipient.name, "status": "sent", "message_id": message_id})
 
     return {"results": results}

@@ -96,6 +96,12 @@ An approved template does not replace user consent. Retain the consent source,
 time, wording, and policy version outside this MVP before sending. Free-form
 text should be sent only inside the customer-service conversation window. The
 `/api/test-text` endpoint is strictly a diagnostic tool for that situation.
+`/api/outreach/bulk` (the dashboard's "Bulk Template Outreach") sends a saved
+local Message Template as free-form text too, so it shares this restriction —
+recipients outside an open window are rejected by Meta and reported as failed
+per recipient, not silently skipped. It does not use the Meta-approved
+template mechanism; that remains available only via the single-recipient
+`/api/outreach` endpoint ("Send approved template" in the dashboard).
 
 ## Webhook security and retry behavior
 
